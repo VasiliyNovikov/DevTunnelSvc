@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "isRoot": true,
+  "tools": {
+    "crap4dotnet": {
+      "version": "0.2.0",
+      "commands": ["dotnet-crap"],
+      "rollForward": true
+    },
+    "dotnet-stryker": {
+      "version": "5.1.0",
+      "commands": ["dotnet-stryker"],
+      "rollForward": true
+    }
+  }
+}

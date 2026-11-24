@@ -1,0 +1,14 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <PublishAot>true</PublishAot>
+    <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <AdditionalFiles Include="CodeMetricsConfig.txt" />
+    <InternalsVisibleTo Include="DevTunnelSvc.Tests" />
+  </ItemGroup>
+
+</Project>

@@ -1,0 +1,8 @@
+.git
+.idea
+.vs
+artifacts
+**/bin
+**/obj
+**/TestResults
+**/StrykerOutput

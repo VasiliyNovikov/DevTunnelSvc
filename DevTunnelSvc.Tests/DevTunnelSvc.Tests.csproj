@@ -1,0 +1,28 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Using Include="Microsoft.VisualStudio.TestTools.UnitTesting" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\DevTunnelSvc\DevTunnelSvc.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="coverlet.msbuild" PrivateAssets="all" />
+    <PackageReference Include="MSTest" />
+  </ItemGroup>
+
+  <PropertyGroup Condition="'$(CollectCoverage)' == 'true'">
+    <Include>[DevTunnelSvc]*</Include>
+    <CoverletOutput>$(MSBuildProjectDirectory)/../artifacts/coverage/</CoverletOutput>
+    <CoverletOutputFormat>cobertura</CoverletOutputFormat>
+    <Threshold>80</Threshold>
+    <ThresholdType>line,branch</ThresholdType>
+  </PropertyGroup>
+
+</Project>

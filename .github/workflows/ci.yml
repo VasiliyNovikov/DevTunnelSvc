@@ -1,0 +1,117 @@
+name: CI
+
+on:
+  push:
+    branches: ['**']
+    tags: ['v*']
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Test (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-24.04, rid: linux-x64 }
+          - { os: ubuntu-24.04-arm, rid: linux-arm64 }
+          - { os: windows-latest, rid: win-x64 }
+          - { os: windows-11-arm, rid: win-arm64 }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: '11.0.x'
+      - name: Run Release tests
+        if: matrix.rid != 'linux-x64'
+        run: dotnet test DevTunnelSvc.slnx --configuration Release
+      - name: Run Release tests with coverage and CRAP gates
+        if: matrix.rid == 'linux-x64'
+        run: dotnet eng/quality.cs coverage
+      - name: Measure Roslyn metrics and gate method length
+        if: ${{ !cancelled() && matrix.rid == 'linux-x64' }}
+        run: dotnet eng/metrics.cs
+      - name: Upload coverage, CRAP, and Roslyn reports
+        if: ${{ !cancelled() && matrix.rid == 'linux-x64' }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: code-quality
+          path: |
+            artifacts/coverage/
+            artifacts/metrics/
+          if-no-files-found: error
+      - name: Check formatting
+        if: matrix.rid == 'linux-x64'
+        run: dotnet format whitespace DevTunnelSvc.slnx --no-restore --verify-no-changes
+      - name: Package and smoke-test on glibc 2.28
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          version=0.0.0-dev
+          if [[ "$GITHUB_REF_TYPE" == tag ]]; then version="${GITHUB_REF_NAME#v}"; fi
+          docker buildx build --file eng/linux-release.Dockerfile --build-arg "VERSION=$version" \
+            --output type=local,dest=artifacts/packages .
+      - name: Package and smoke-test the Windows CLI
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          if ($env:GITHUB_REF_TYPE -eq 'tag') {
+            dotnet eng/release.cs ($env:GITHUB_REF_NAME.Substring(1))
+          } else {
+            dotnet eng/release.cs
+          }
+      - uses: actions/upload-artifact@v7
+        with:
+          name: package-${{ matrix.rid }}
+          path: artifacts/packages/${{ matrix.rid }}/
+          if-no-files-found: error
+
+  mutation:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: '11.0.x'
+      - name: Run mutation tests
+        run: dotnet eng/quality.cs mutation
+      - name: Upload mutation reports
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: mutation
+          path: artifacts/mutation/reports/
+          if-no-files-found: error
+
+  release:
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    needs: [test, mutation]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: package-*
+          merge-multiple: true
+          path: packages
+      - name: Publish tested assets with generated release notes
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          assets=(packages/devtunnelsvc-linux-x64 packages/devtunnelsvc-linux-arm64
+                  packages/devtunnelsvc-win-x64.zip packages/devtunnelsvc-win-arm64.zip)
+          for asset in "${assets[@]}"; do
+            [[ -s "$asset" ]] || { echo "Missing release asset: $asset" >&2; exit 1; }
+          done
+          flags=(--verify-tag --generate-notes)
+          if [[ "$GITHUB_REF_NAME" == *-* ]]; then flags+=(--prerelease --latest=false); fi
+          gh release create "$GITHUB_REF_NAME" "${assets[@]}" "${flags[@]}"
