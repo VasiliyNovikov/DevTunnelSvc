@@ -18,7 +18,8 @@
   </ItemGroup>
 
   <PropertyGroup Condition="'$(CollectCoverage)' == 'true'">
-    <Include>[DevTunnelSvc]*</Include>
+    <Include>[devtunnelsvc]*</Include>
+    <ExcludeByFile>**/System.Text.Json.SourceGeneration.JsonSourceGenerator/*.g.cs,**/Microsoft.Interop.LibraryImportGenerator/LibraryImports.g.cs</ExcludeByFile>
     <CoverletOutput>$(MSBuildProjectDirectory)/../artifacts/coverage/</CoverletOutput>
     <CoverletOutputFormat>cobertura</CoverletOutputFormat>
     <Threshold>80</Threshold>

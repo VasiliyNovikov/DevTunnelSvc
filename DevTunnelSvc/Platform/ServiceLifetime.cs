@@ -1,0 +1,138 @@
+using System.Diagnostics;
+using System.Runtime.InteropServices;
+using System.Runtime.Versioning;
+using DevTunnelSvc.Auth;
+using DevTunnelSvc.Service;
+using DevTunnelSvc.Tunnels;
+using Microsoft.Win32;
+
+namespace DevTunnelSvc.Platform;
+
+internal static class ServiceLifetime
+{
+    private const string Unit = "devtunnelsvc.service";
+    private const string StartupKey = @"Software\Microsoft\Windows\CurrentVersion\Run";
+
+    public static Task RunAsync(TextWriter log, CancellationToken ct) => RunAsync(log, Control.PipeName, null, ct,
+        OperatingSystem.IsWindows() ? CreateWindowsTray : null);
+
+    [SupportedOSPlatform("windows")]
+    private static TrayIcon CreateWindowsTray(Action<Exception> failed) => new(failed);
+
+    internal static async Task RunAsync(TextWriter log, string name, string? stateDirectory, CancellationToken ct,
+        Func<Action<Exception>, IDisposable>? createTray = null)
+    {
+        using var instance = InstanceLease.Acquire(stateDirectory);
+        using var lifetime = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        using var term = OperatingSystem.IsLinux() ? PosixSignalRegistration.Create(PosixSignal.SIGTERM,
+            signal => { signal.Cancel = true; lifetime.Cancel(); }) : null;
+        Exception? trayFailure = null;
+        using var tray = createTray?.Invoke(ex => { Volatile.Write(ref trayFailure, ex); lifetime.Cancel(); });
+        using var http = GitHubOAuth.CreateClient();
+        http.Timeout = TimeSpan.FromSeconds(20);
+        using var credential = new SessionCredential(new CredentialFile(stateDirectory ?? InstanceLease.DefaultDirectory),
+            (token, tokenCt) => GitHubOAuth.RefreshAsync(http, token, tokenCt), TimeProvider.System);
+        await using var backend = new TunnelBackend(() => credential.RequireTokenAsync(lifetime.Token));
+        await using var service = new TunnelService(backend, credential);
+        await ControlServer.RunAsync(name, service, log, lifetime.Token);
+        if (Volatile.Read(ref trayFailure) is { } failure)
+            throw new InvalidOperationException($"Notification-area icon failed: {failure.Message}", failure);
+    }
+
+    public static Task<string> StartAsync(CancellationToken ct) => StartAsync(OperatingSystem.IsWindows(),
+        t => Control.SendAsync(new("status"), t), LaunchAsync, ct);
+
+    internal static async Task<string> StartAsync(bool checkExisting, Func<CancellationToken, Task<string>> status,
+        Func<CancellationToken, Task> launch, CancellationToken ct)
+    {
+        if (checkExisting)
+        {
+            try { return await status(ct); }
+            catch (IOException ex) when (ex.InnerException is TimeoutException) { /* Launch if the service is not listening. */ }
+        }
+        await launch(ct);
+        for (var attempt = 0; ; attempt++)
+        {
+            try { return await status(ct); }
+            catch (IOException ex) when (ex.InnerException is TimeoutException && attempt < 4)
+            {
+                await Task.Delay(150, ct);
+            }
+        }
+    }
+
+    private static Task LaunchAsync(CancellationToken ct) => LaunchAsync(OperatingSystem.IsWindows() ? ApplicationExecutable() : null,
+        info => Process.Start(info)!.Dispose(), SystemctlAsync, ct);
+
+    internal static Task LaunchAsync(string? windowsExe, Action<ProcessStartInfo> start, Func<string[], CancellationToken, Task> systemctl, CancellationToken ct)
+    {
+        if (windowsExe is null)
+            return systemctl(["start", Unit], ct);
+        start(new ProcessStartInfo(windowsExe, ["service", "run"]) { UseShellExecute = true, WindowStyle = ProcessWindowStyle.Hidden });
+        return Task.CompletedTask;
+    }
+
+    public static Task<string> InstallAsync(CancellationToken ct) => InstallAsync(ApplicationExecutable(),
+        Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData, Environment.SpecialFolderOption.DoNotVerify),
+        OperatingSystem.IsWindows() ? SetWindowsStartup : null, SystemctlAsync, ct);
+
+    internal static async Task<string> InstallAsync(string executable, string configDirectory, Action<string, string>? registerStartup,
+        Func<string[], CancellationToken, Task> systemctl, CancellationToken ct)
+    {
+        if (registerStartup is not null)
+            registerStartup("DevTunnelSvc", $"\"{executable}\" service start");
+        else
+            await InstallLinuxAsync(executable, configDirectory, systemctl, ct);
+        return "Installed for the current user. Run 'service start'.";
+    }
+
+    internal static async Task InstallLinuxAsync(string executable, string configDirectory, Func<string[], CancellationToken, Task> systemctl, CancellationToken ct)
+    {
+        var directory = Directory.CreateDirectory(Path.Combine(configDirectory, "systemd", "user"));
+        await File.WriteAllTextAsync(Path.Combine(directory.FullName, Unit), UnitFile(executable), ct);
+        await systemctl(["daemon-reload"], ct);
+        await systemctl(["enable", Unit], ct);
+    }
+
+    internal static string UnitFile(string path)
+    {
+        if (path.Any(char.IsControl))
+            throw new ArgumentException("Control characters are not supported in the executable path.");
+        var escaped = path.Replace("\\", "\\\\", StringComparison.Ordinal).Replace("\"", "\\\"", StringComparison.Ordinal)
+            .Replace("%", "%%", StringComparison.Ordinal).Replace("$", "$$", StringComparison.Ordinal);
+        return $"[Unit]\nDescription=DevTunnelSvc\n\n[Service]\nExecStart=\"{escaped}\" service run\nRestart=on-failure\n\n[Install]\nWantedBy=default.target\n";
+    }
+
+    internal static string ApplicationExecutable() => RequireExecutable(Environment.ProcessPath);
+
+    internal static string RequireExecutable(string? executable)
+    {
+        var path = executable ?? throw new InvalidOperationException("Executable path unavailable.");
+        if (string.Equals(Path.GetFileNameWithoutExtension(path), "dotnet", StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException("Use the published devtunnelsvc executable for this command.");
+        return path;
+    }
+
+    [SupportedOSPlatform("windows")]
+    private static void SetWindowsStartup(string name, string command)
+    {
+        using var key = Registry.CurrentUser.CreateSubKey(StartupKey);
+        key.SetValue(name, command);
+    }
+
+    private static Task SystemctlAsync(string[] args, CancellationToken ct) => SystemctlAsync(args, ExitCodeAsync, ct);
+
+    internal static async Task SystemctlAsync(string[] args, Func<ProcessStartInfo, CancellationToken, Task<int>> run, CancellationToken ct)
+    {
+        var code = await run(new ProcessStartInfo("systemctl", args.Prepend("--user")), ct);
+        if (code != 0)
+            throw new InvalidOperationException($"systemctl --user {args[0]} failed ({code}).");
+    }
+
+    private static async Task<int> ExitCodeAsync(ProcessStartInfo info, CancellationToken ct)
+    {
+        using var process = Process.Start(info)!;
+        await process.WaitForExitAsync(ct);
+        return process.ExitCode;
+    }
+}

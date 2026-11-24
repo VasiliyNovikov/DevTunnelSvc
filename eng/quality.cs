@@ -29,7 +29,7 @@ static int Coverage(string root)
         return tests;
 
     var coverage = XDocument.Load(cobertura).Root!;
-    if (!coverage.Descendants("package").Any(p => (string?)p.Attribute("name") == "DevTunnelSvc" &&
+    if (!coverage.Descendants("package").Any(p => (string?)p.Attribute("name") == "devtunnelsvc" &&
         p.Descendants("line").Any(line => (int)line.Attribute("hits")! > 0)))
         throw new InvalidDataException("Cobertura did not measure the production assembly.");
 

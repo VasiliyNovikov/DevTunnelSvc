@@ -2,11 +2,26 @@
 
   <PropertyGroup>
     <OutputType>Exe</OutputType>
-    <PublishAot>true</PublishAot>
+    <AssemblyName>devtunnelsvc</AssemblyName>
+    <RootNamespace>DevTunnelSvc</RootNamespace>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
   </PropertyGroup>
 
+  <PropertyGroup Condition="'$(RuntimeIdentifier)' != ''">
+    <SelfContained>true</SelfContained>
+    <PublishSingleFile>true</PublishSingleFile>
+    <PublishReadyToRun>true</PublishReadyToRun>
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+    <PublishTrimmed>false</PublishTrimmed>
+  </PropertyGroup>
+
   <ItemGroup>
+    <!-- The SDK's minimum WebUtilities version has a published security advisory. -->
+    <PackageReference Include="Microsoft.AspNetCore.WebUtilities" />
+    <PackageReference Include="Microsoft.DevTunnels.Connections" />
+    <PackageReference Include="System.CommandLine" />
+    <PackageReference Include="System.Security.Cryptography.ProtectedData" />
     <AdditionalFiles Include="CodeMetricsConfig.txt" />
     <InternalsVisibleTo Include="DevTunnelSvc.Tests" />
   </ItemGroup>

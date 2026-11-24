@@ -23,7 +23,7 @@ try
 {
     var publishDir = Path.Combine(staging.FullName, "publish");
     string[] publishArgs = ["publish", Path.Combine(root, "DevTunnelSvc", "DevTunnelSvc.csproj"),
-        "-c", "Release", "-r", rid, "--self-contained", "true", "-p:PublishAot=true", $"-p:Version={version}", "-o", publishDir];
+        "-c", "Release", "-r", rid, "--self-contained", "true", $"-p:Version={version}", "-o", publishDir];
     using var publish = Process.Start(new ProcessStartInfo("dotnet", publishArgs) { WorkingDirectory = root })!;
     publish.WaitForExit();
     if (publish.ExitCode != 0)
@@ -33,7 +33,7 @@ try
     var executable = asset;
     if (OperatingSystem.IsWindows())
     {
-        const string exeName = "DevTunnelSvc.exe";
+        const string exeName = "devtunnelsvc.exe";
         asset += ".zip";
         using (var zip = ZipFile.Open(asset, ZipArchiveMode.Create))
             zip.CreateEntryFromFile(Path.Combine(publishDir, exeName), exeName);
@@ -43,13 +43,13 @@ try
     }
     else
     {
-        File.Copy(Path.Combine(publishDir, "DevTunnelSvc"), asset);
+        File.Copy(Path.Combine(publishDir, "devtunnelsvc"), asset);
     }
 
     var actual = RunCli(executable, "--version");
     if (actual != version)
         throw new InvalidDataException($"Packaged CLI reported '{actual}', expected '{version}'.");
-    if (!RunCli(executable, "--help").StartsWith("Usage: DevTunnelSvc ", StringComparison.Ordinal))
+    if (!RunCli(executable, "--help").StartsWith("Usage: devtunnelsvc ", StringComparison.Ordinal))
         throw new InvalidDataException("Packaged CLI did not print its usage.");
 
     var destination = Directory.CreateDirectory(Path.Combine(root, "artifacts", "packages", rid));

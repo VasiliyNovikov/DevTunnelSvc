@@ -14,11 +14,11 @@ Keep the client's local listen port, the tunnel port, and the host's local targe
 
 ## Publishing and self-update
 
-Publish one self-contained Native AOT executable per supported OS and architecture. Keep SDK integration and platform-specific dependencies compatible with trimming and Native AOT; the installed service must not require a separate .NET runtime.
+V1 publishes one untrimmed, self-contained **ReadyToRun single-file** executable per supported OS and architecture, including native runtime libraries. JIT is intentional: the official Dev Tunnels SDK uses reflection in JSON handling and SSH activation. Do not fork the SDK, suppress dependency warnings, or re-enable Native AOT without validating the complete data path. No separate .NET runtime installation is required.
 
 Distribute the binaries through GitHub Releases. Self-update must be available through the CLI on both platforms and select the release asset for the installed OS and architecture.
 
-Build on the target architecture. On Windows, use the .NET 11 SDK and its [Native AOT build tools](https://learn.microsoft.com/dotnet/core/deploying/native-aot/#prerequisites):
+Build on the target architecture. On Windows use the .NET 11 SDK:
 
 ```shell
 dotnet eng/release.cs 1.2.3
@@ -32,7 +32,7 @@ docker buildx build -f eng/linux-release.Dockerfile --build-arg VERSION=1.2.3 --
 
 The Dockerfile builds on UBI 8, runs the exact binary offline in a clean UBI 8 image without .NET, and exports only the verified package. Building directly with `dotnet eng/release.cs` on a newer Linux distro can raise the glibc requirement; don't promote those local builds. For a private restore source, pass a user NuGet configuration as a BuildKit secret (`--secret id=nuget-config,src=PATH`) rather than copying it into the image.
 
-Omit the version for a `0.0.0-dev` package. The release script runs `--version` and `--help` on the actual deliverable (after extraction on Windows). Keep the [asset names](README.md#download-and-run) stable for CLI self-update. Windows ZIPs contain only `DevTunnelSvc.exe`; Linux assets are standalone binaries. Both are written to `artifacts/packages/<rid>/`.
+Omit the version for a `0.0.0-dev` package. The release script runs `--version` and `--help` on the actual deliverable (after extraction on Windows). Keep the [asset names](README.md#download-and-run) stable for CLI self-update. The executable is lowercase: Windows ZIPs contain only `devtunnelsvc.exe`; Linux ships the standalone `devtunnelsvc` binary under a RID-suffixed asset name. Both are written to `artifacts/packages/<rid>/`.
 
 To publish, tag the intended commit (for example `git tag -a v1.2.3 -m "Release v1.2.3"`) and push **that tag** (`git push origin v1.2.3`). CI stamps the version without `v` into each executable. Only a tag push can create a GitHub Release, and only after the Windows/Linux x64 and Arm64 packages, tests, and quality gates pass. CI uploads the already smoke-tested assets without rebuilding and generates release notes. A tag such as `v1.2.3-rc.1` creates a prerelease, not the latest stable release.
 
@@ -40,19 +40,25 @@ To publish, tag the intended commit (for example `git tag -a v1.2.3 -m "Release 
 
 Use the .NET 11 SDK from the repository root. Shared build settings belong in `Directory.Build.props`; the recommended analyzer rules follow the target framework, not the newest SDK on the machine. Pin NuGet versions in `Directory.Packages.props` and leave `PackageReference` entries in individual projects versionless.
 
+The CLI sends bounded, versioned messages to a same-user named pipe. `TunnelService` serializes changes to active mappings; `TunnelBackend` owns the management client and opens the relay sessions. `MappedHost` registers an explicit SDK SSH forward instead of the SDK's default same-port mapping. `MappedClient` filters remote ports and supplies an exact loopback listener. Do not re-enable automatic port selection. Tests use actual SDK SSH peers on loopback; GitHub and tunnel management HTTP responses are supplied offline.
+
+The invoking CLI, not the service, owns the browser and clipboard interaction. Only GitHub's `user_code` may be copied, never the `device_code` or access token. Login tests use a substitute clipboard, not the developer's desktop.
+
+The service owns the saved GitHub grant. Serialize refresh, replacement, and logout: GitHub invalidates the previous grant on rotation. Persist the new pair atomically before giving its token to the SDK. Shutdown disposes mappings but must not delete the grant; logout must. Use temporary credential directories and synthetic tokens in tests, never a developer's real store.
+
 ```shell
 dotnet build DevTunnelSvc.slnx
 dotnet test DevTunnelSvc.slnx --configuration Release
 dotnet test DevTunnelSvc.slnx --filter "FullyQualifiedName=DevTunnelSvc.Tests.CliTests.UnknownArgumentFails"
 ```
 
-For local Linux testing on Windows, use a disposable WSLC container (`wslc run --rm`) with `mcr.microsoft.com/dotnet/sdk:11.0-aot`. Mount the checkout read-only and build in a clean copy inside the container so the Windows and Linux builds do not share `bin` or `obj`. For the release Dockerfile use `wslc build` with a tar output (`--output type=tar,dest=artifacts/linux-release.tar`) instead of Docker's directory exporter.
+For local Linux testing on Windows, use a disposable WSLC container (`wslc run --rm`) with `mcr.microsoft.com/dotnet/sdk:11.0`. Mount the checkout read-only and build in a clean copy inside the container so the Windows and Linux builds do not share `bin` or `obj`. For the release Dockerfile use `wslc build` with a tar output (`--output type=tar,dest=artifacts/linux-release.tar`) instead of Docker's directory exporter.
 
 ## Coding conventions
 
 - Apply SOLID where the service has distinct reasons to change: the CLI translates arguments, the shared service owns SDK connections, and Windows/Linux adapters own process lifetime. Pass dependencies at those boundaries. Introduce a small, replaceable interface for an actual second implementation or test seam, not a layer for every class.
 - Write for the next reader. Use names that express role and ownership, such as `clientListenPort` and `hostTargetPort`; do not pass three interchangeable integers named `port1`, `port2`, and `port3`. Keep related behavior together and make success, failure, and cancellation paths easy to trace. Comment on a non-obvious constraint rather than restating the code.
-- Prefer the BCL and the Dev Tunnels SDK over new runtime dependencies. When adding the planned `host` and `connect` subcommands, prefer `System.CommandLine` to a growing hand-written parser; keep forwarding and service logic out of command handlers.
+- Prefer the BCL and the official Dev Tunnels SDK over new runtime dependencies. Use `System.CommandLine` for subcommands; keep forwarding and service logic out of command handlers.
 - Make the service responsible for cancelling and awaiting its forwarding tasks on shutdown or reconnect. Report a connection as ready only after the SDK confirms it; surface failures through the CLI exit code and stderr.
 - Keep protocol and settings types compatible with Native AOT. Use a source-generated `System.Text.Json` context for wire types and version incompatible changes so that an older CLI cannot misinterpret a service response.
 - Prefer a few focused MSTest cases at the behavior boundary: CLI output and exit status, port mappings, and connection lifetime. Extend existing test classes when the behavior belongs there. Keep the default suite independent of live tunnels, GitHub credentials, and fixed local ports.
@@ -71,7 +77,7 @@ dotnet format whitespace DevTunnelSvc.slnx --no-restore --verify-no-changes
 
 | Gate | Passing condition |
 | --- | --- |
-| Coverage | At least 80% line **and** 80% branch coverage in the production assembly. |
+| Coverage | At least 80% line **and** 80% branch coverage in the production assembly. Exclude only the framework generators' JSON serializers and native interop stubs, not the handwritten service or platform code. |
 | CRAP (complexity vs. coverage) | No method scores above 25: total CRAP load is zero. Coverage must match production methods. |
 | Mutation | Stryker score at least 80%. Each file with valid mutants needs a kill; an empty run fails. |
 | Maintainability | Production builds cap method complexity at 10, inheritance depth at 4, and type coupling at 54. Method maintainability index must be at least 48. CI also caps declared methods at 46 source lines and 28 executable lines. |
