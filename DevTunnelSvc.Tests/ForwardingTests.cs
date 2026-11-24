@@ -51,14 +51,14 @@ public sealed class ForwardingTests
         using var occupied = Listen();
         using var selection = Listen();
         var localPort = Port(selection);
-        selection.Stop();
         var tunnelPort = Port(occupied);
         using var peer = new RelayPeer();
         using var handler = Api(tunnelPort);
         await using var backend = new TunnelBackend(() => Task.FromResult("local-test"), handler, peer);
         var opening = backend.OpenAsync(Mapping.Create(false, "blue-tunnel.use2", tunnelPort, localPort), ct);
-        await peer.Connected.Task.WaitAsync(ct);
+        await peer.Authenticated.Task.WaitAsync(ct);
         Assert.IsNull(await peer.Ports.ForwardFromRemotePortAsync(IPAddress.Loopback, Port(target), "127.0.0.1", Port(target), ct));
+        selection.Stop();
         using var forwarding = await peer.Ports.ForwardFromRemotePortAsync(IPAddress.Loopback, tunnelPort, "127.0.0.1", Port(target), ct);
         Assert.IsNotNull(forwarding);
         await using var client = await opening.WaitAsync(ct);
@@ -112,7 +112,7 @@ public sealed class ForwardingTests
         using var handler = Api(Port(tunnelPort));
         await using var backend = new TunnelBackend(() => Task.FromResult("local-test"), handler, peer);
         var opening = backend.OpenAsync(Mapping.Create(false, "blue-tunnel.use2", Port(tunnelPort), Port(conflict)), ct);
-        await peer.Connected.Task.WaitAsync(ct);
+        await peer.Authenticated.Task.WaitAsync(ct);
         var announcement = peer.Ports.ForwardFromRemotePortAsync(IPAddress.Loopback, Port(tunnelPort), "127.0.0.1", Port(conflict), ct);
         var error = await Assert.ThrowsExactlyAsync<IOException>(() => opening.WaitAsync(ct));
         Assert.Contains($"localhost:{Port(conflict)}", error.Message);
@@ -132,7 +132,6 @@ public sealed class ForwardingTests
         using var reservation = Listen();
         var tunnelPort = Port(occupied);
         var listenPort = Port(reservation);
-        reservation.Stop();
         List<string> hostKeys = [];
         using var hostPeer = new RelayPeer();
         using var clientPeer = new RelayPeer(encrypted: true);
@@ -146,7 +145,8 @@ public sealed class ForwardingTests
         await using var host = await hostBackend.OpenAsync(Mapping.Create(true, "blue-tunnel.use2", tunnelPort, Port(appListener)), ct);
         Assert.IsNotEmpty(hostKeys);
         var opening = clientBackend.OpenAsync(Mapping.Create(false, "blue-tunnel.use2", tunnelPort, listenPort), ct);
-        await clientPeer.Connected.Task.WaitAsync(ct);
+        await clientPeer.Authenticated.Task.WaitAsync(ct);
+        reservation.Stop();
         using var announced = await clientPeer.Ports.StreamFromRemotePortAsync(IPAddress.Loopback, tunnelPort, ct);
         Assert.IsNotNull(announced);
         var incoming = new TaskCompletionSource<Stream>(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -235,7 +235,7 @@ public sealed class ForwardingTests
         private readonly IKeyPair key = SshAlgorithms.PublicKey.ECDsaSha2Nistp384.GenerateKeyPair();
         public TraceSource Trace { get; } = new("offline relay", SourceLevels.Off);
         public PortForwardingService Ports { get; }
-        public TaskCompletionSource Connected { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource Authenticated { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         public RelayPeer(bool encrypted = false, bool allowForwarding = true)
         {
@@ -243,6 +243,8 @@ public sealed class ForwardingTests
             config.AddService(typeof(PortForwardingService));
             session = new SshServerSession(config, Trace) { Credentials = new SshServerCredentials(key) };
             session.Authenticating += (_, e) => e.AuthenticationTask = Task.FromResult<ClaimsPrincipal?>(new ClaimsPrincipal());
+            // SSH rejects port announcements sent after transport setup but before authentication.
+            session.ClientAuthenticated += (_, _) => Authenticated.TrySetResult();
             session.Request += (_, e) => e.IsAuthorized = allowForwarding;
             session.ChannelOpening += (_, e) =>
             {
@@ -265,8 +267,8 @@ public sealed class ForwardingTests
 
         private async Task AcceptAsync(Stream stream, CancellationToken ct)
         {
-            try { await session.ConnectAsync(stream, ct); Connected.TrySetResult(); }
-            catch (Exception ex) { Connected.TrySetException(ex); }
+            try { await session.ConnectAsync(stream, ct); }
+            catch (Exception ex) { Authenticated.TrySetException(ex); }
         }
 
         public void Dispose() { session.Dispose(); key.Dispose(); listener.Stop(); Trace.Close(); }
