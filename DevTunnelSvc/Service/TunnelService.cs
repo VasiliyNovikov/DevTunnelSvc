@@ -1,3 +1,4 @@
+using System.Globalization;
 using DevTunnelSvc.Auth;
 using DevTunnelSvc.Tunnels;
 
@@ -16,6 +17,7 @@ internal sealed class TunnelService(ITunnelBackend backend, SessionCredential cr
         {
             "login" => LoginAsync(request.SignIn, ct),
             "status" => Task.FromResult(Status()),
+            "service-pid" => Task.FromResult(Environment.ProcessId.ToString(CultureInfo.InvariantCulture)),
             "logout" => EndSessionAsync(logout: true),
             "create" => Authenticated().CreateAsync(ct),
             "delete" => DeleteAsync(TunnelKey.Parse(request.Tunnel), ct),

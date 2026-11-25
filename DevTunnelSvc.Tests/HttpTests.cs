@@ -6,6 +6,7 @@ using System.Text;
 using System.Text.Json;
 using DevTunnelSvc.Auth;
 using DevTunnelSvc.Platform;
+using DevTunnelSvc.Service;
 using DevTunnelSvc.Tunnels;
 using DevTunnelSvc.Updates;
 
@@ -189,9 +190,12 @@ public sealed class HttpTests
     }
 
     [TestMethod]
-    [DataRow(true)]
-    [DataRow(false)]
-    public async Task TrayInstallsOnlyTheConfirmedVerifiedReleaseAndRestartsFromTheInstalledPath(bool validDigest)
+    [DataRow(true, true, true)]
+    [DataRow(true, true, false)]
+    [DataRow(false, true, true)]
+    [DataRow(false, true, false)]
+    [DataRow(false, false, true)]
+    public async Task UpdatesInstallTheSelectedVerifiedReleaseAndRestoreOnlyAPreviouslyRunningService(bool tray, bool initiallyRunning, bool validDigest)
     {
         var directory = Directory.CreateTempSubdirectory("devtunnel-tray-update-");
         var exe = Path.Combine(directory.FullName, "installed");
@@ -200,13 +204,16 @@ public sealed class HttpTests
         var archive = windows ? Zip("devtunnelsvc.exe", bytes) : bytes;
         var name = ReleaseUpdate.AssetName(windows, System.Runtime.InteropServices.RuntimeInformation.ProcessArchitecture);
         var digest = validDigest ? $"sha256:{Convert.ToHexString(SHA256.HashData(archive))}" : "sha256:wrong";
-        var running = true;
+        var running = initiallyRunning;
         var checks = 0;
+        var confirms = 0;
+        var starts = 0;
+        var leases = 0;
         using var http = new HttpClient(new HttpStub((r, _) =>
         {
             if (r.RequestUri!.Host == "api.github.com")
             {
-                Assert.IsTrue(running);
+                Assert.AreEqual(initiallyRunning, running);
                 checks++;
                 return Task.FromResult(HttpStub.Json(JsonSerializer.Serialize(new { tag_name = "v2.0.0", assets = new[] { new { name, size = archive.Length, digest } } })));
             }
@@ -217,23 +224,145 @@ public sealed class HttpTests
         try
         {
             await File.WriteAllTextAsync(exe, "original");
-            var updater = new ReleaseUpdate(http);
-            var tray = new TrayUpdate(t => updater.FindNewerAsync("1.0.0", t),
-                question => { Assert.IsTrue(running); Assert.Contains("v2.0.0", question); return true; },
-                _ => { running = false; return Task.CompletedTask; },
-                (release, t) => updater.ApplyAsync(release, exe, () => InstanceLease.Acquire(directory.FullName), t),
-                async () =>
-                {
-                    using var lease = InstanceLease.Acquire(directory.FullName);
-                    Assert.AreEqual(validDigest ? "replacement" : "original", await File.ReadAllTextAsync(exe));
-                    running = true;
-                });
-            if (validDigest) Assert.Contains("Installed v2.0.0", (await tray.RunAsync("1.0.0", CancellationToken.None))!);
-            else Assert.Contains("SHA-256", (await Assert.ThrowsExactlyAsync<InvalidOperationException>(() => tray.RunAsync("1.0.0", CancellationToken.None))).Message);
+            bool Confirm(string question) { Assert.IsTrue(running); Assert.Contains("v2.0.0", question); confirms++; return true; }
+            async Task Restart()
+            {
+                using var lease = InstanceLease.Acquire(directory.FullName);
+                Assert.AreEqual(validDigest ? "replacement" : "original", await File.ReadAllTextAsync(exe));
+                starts++;
+                running = true;
+            }
+            Task<string> Send(Request request, CancellationToken _)
+            {
+                if (!running) throw new IOException("not listening", new TimeoutException());
+                if (request.Command == "service-pid") return Task.FromResult("42");
+                Assert.AreEqual(1, confirms);
+                Assert.AreEqual(new Request("shutdown-for-update", ServicePid: 42), request);
+                running = false;
+                return Task.FromResult("stopping");
+            }
+            IDisposable Lease()
+            {
+                Assert.IsFalse(running);
+                if (++leases == 1 && initiallyRunning && !tray) throw new IOException("shutdown is finishing");
+                return InstanceLease.Acquire(directory.FullName);
+            }
+            var updater = new ReleaseUpdate(http, new(Send, (question, _) => Task.FromResult(Confirm(question)), Restart));
+            var menu = new TrayUpdate(t => updater.FindNewerAsync("1.0.0", t), Confirm,
+                _ => { running = false; return Task.CompletedTask; }, (release, t) => updater.ApplyAsync(release, exe, Lease, t), Restart);
+            async Task<string?> Update() => tray ? await menu.RunAsync("1.0.0", CancellationToken.None)
+                : await updater.RunAsync("1.0.0", exe, false, Lease, CancellationToken.None);
+            if (validDigest) Assert.Contains("Installed v2.0.0", (await Update())!);
+            else Assert.Contains("SHA-256", (await Assert.ThrowsExactlyAsync<InvalidOperationException>(Update)).Message);
             Assert.AreEqual(1, checks);
-            Assert.IsTrue(running);
+            Assert.AreEqual(initiallyRunning ? 1 : 0, confirms);
+            Assert.AreEqual(confirms, starts);
+            Assert.AreEqual(initiallyRunning, running);
+            Assert.AreEqual(validDigest ? "replacement" : "original", await File.ReadAllTextAsync(exe));
         }
         finally { directory.Delete(true); }
+    }
+
+    [TestMethod]
+    [DataRow("2.0.0", false, "up to date")]
+    [DataRow("3.0.0", false, "up to date")]
+    [DataRow("1.0.0", true, "Available: v2.0.0")]
+    [DataRow("1.0.0", false, "cancelled")]
+    public async Task ForceIsReadOnlyForACurrentReleaseCheckOrDeclinedStop(string installed, bool check, string expected)
+    {
+        var asked = expected == "cancelled";
+        using var prompt = new StringWriter();
+        using var eof = new StringReader("");
+        var requests = new List<Request>();
+        var handoff = new UpdateHandoff((r, _) => { requests.Add(r); return Task.FromResult("99"); },
+            (q, ct) => UpdateHandoff.ConfirmAsync(eof, prompt, q, ct), () => throw new AssertFailedException());
+        using var http = new HttpClient(new HttpStub((r, _) =>
+        {
+            Assert.AreEqual("api.github.com", r.RequestUri!.Host, "No asset should be downloaded.");
+            return Task.FromResult(HttpStub.Json("""{"tag_name":"v2.0.0","assets":[]}"""));
+        }));
+        var result = await new ReleaseUpdate(http, handoff).RunAsync(installed, "unused", check, () => throw new AssertFailedException(), CancellationToken.None);
+        Assert.Contains(expected, result);
+        CollectionAssert.AreEqual(asked ? new Request[] { new("service-pid") } : [], requests);
+        if (asked) Assert.Contains("stop all active port mappings", prompt.ToString());
+        else Assert.IsEmpty(prompt.ToString());
+    }
+
+    [TestMethod]
+    [DataRow(" Y ", true)]
+    [DataRow("Yes", true)]
+    [DataRow("", false)]
+    [DataRow("no", false)]
+    [DataRow("yesterday", false)]
+    public async Task ForcePromptRequiresAnExplicitYes(string answer, bool expected)
+    {
+        using var input = new StringReader(answer + "\n");
+        using var buffer = new MemoryStream();
+        using var output = new StreamWriter(buffer);
+        Assert.AreEqual(expected, await UpdateHandoff.ConfirmAsync(input, output, "Stop now?", CancellationToken.None));
+        Assert.Contains("Stop now? [y/N]", Encoding.UTF8.GetString(buffer.ToArray()), "The prompt must be visible without waiting for a newline or disposing the writer.");
+    }
+
+    [TestMethod]
+    public async Task AServiceThatNeverReleasesItsLeaseSurfacesTheLockErrorAfterABoundedWait()
+    {
+        var elapsed = TimeSpan.Zero;
+        var failure = await Assert.ThrowsExactlyAsync<IOException>(() => UpdateHandoff.WaitForLeaseAsync(
+            () => throw new IOException("in use"), interval =>
+            {
+                Assert.IsGreaterThan(TimeSpan.Zero, interval);
+                elapsed += interval;
+                Assert.IsLessThanOrEqualTo(TimeSpan.FromSeconds(30), elapsed);
+                return Task.CompletedTask;
+            }));
+        Assert.AreEqual("in use", failure.Message);
+        Assert.AreEqual(TimeSpan.FromSeconds(30), elapsed);
+    }
+
+    [TestMethod]
+    public async Task ForceCannotStopAnInvalidOrReplacedServiceOrIgnoreCancellation()
+    {
+        using var cancel = new CancellationTokenSource();
+        var target = "0";
+        var cancelAtPrompt = false;
+        Task<string> Send(Request r, CancellationToken _)
+        {
+            if (r.Command == "service-pid") return Task.FromResult(target);
+            Assert.AreEqual(new Request("shutdown-for-update", ServicePid: 42), r);
+            throw new InvalidOperationException("instance has changed");
+        }
+        var handoff = new UpdateHandoff(Send, (_, _) =>
+        {
+            Assert.AreEqual("42", target);
+            if (cancelAtPrompt) cancel.Cancel();
+            return Task.FromResult(true);
+        }, () => throw new AssertFailedException());
+        Task<string?> Run() => handoff.ApplyIfRunningAsync("1.0.0", "v2.0.0", _ => throw new AssertFailedException(), cancel.Token);
+        Assert.Contains("invalid process ID", (await Assert.ThrowsExactlyAsync<InvalidDataException>(Run)).Message);
+        target = "invalid";
+        await Assert.ThrowsExactlyAsync<InvalidDataException>(Run);
+        target = "42";
+        Assert.Contains("instance has changed", (await Assert.ThrowsExactlyAsync<InvalidOperationException>(Run)).Message);
+        cancelAtPrompt = true;
+        await Assert.ThrowsAsync<OperationCanceledException>(Run);
+    }
+
+    [TestMethod]
+    public async Task CancellationDuringShutdownStillRestartsTheOriginalInstallation()
+    {
+        using var cancel = new CancellationTokenSource();
+        var restarts = 0;
+        var handoff = new UpdateHandoff((request, t) =>
+        {
+            if (request.Command == "service-pid") return Task.FromResult("42");
+            cancel.Cancel();
+            t.ThrowIfCancellationRequested();
+            return Task.FromResult("stopping");
+        }, (_, _) => Task.FromResult(true), () => { restarts++; return Task.CompletedTask; });
+        var failure = await Assert.ThrowsExactlyAsync<InvalidOperationException>(() => handoff.ApplyIfRunningAsync("1.0.0", "v2.0.0",
+            t => { t.ThrowIfCancellationRequested(); throw new AssertFailedException(); }, cancel.Token));
+        Assert.IsInstanceOfType<OperationCanceledException>(failure.InnerException);
+        Assert.AreEqual(1, restarts);
     }
 
     [TestMethod]

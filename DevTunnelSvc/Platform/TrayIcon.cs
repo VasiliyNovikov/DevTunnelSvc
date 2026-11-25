@@ -22,6 +22,7 @@ internal sealed unsafe partial class TrayIcon : IDisposable
     internal TrayIcon(Func<IWindow> factory, Action<Exception?> stopped)
     {
         thread = new Thread(() => Pump(factory, stopped)) { IsBackground = true, Name = "DevTunnelSvc tray" };
+        if (OperatingSystem.IsWindows()) thread.SetApartmentState(ApartmentState.STA);
         thread.Start();
         ready.Task.GetAwaiter().GetResult();
     }
@@ -187,7 +188,7 @@ internal sealed unsafe partial class TrayIcon : IDisposable
                 {
                     if ((uint)parameter == (IconId << 16 | ContextMenu))
                     {
-                        menu.Show(data.Window);
+                        menu.Show(data.Window, data.Icon);
                         _ = shell.NotifyIcon(3, ref data); // NIM_SETFOCUS
                     }
                 }

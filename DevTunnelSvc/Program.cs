@@ -17,7 +17,7 @@ internal static class Program
           host <tunnel> --tunnel-port N --target-port N
           connect <tunnel> --tunnel-port N --listen-port N
           status | stop <mapping>         Inspect or stop a forwarding session
-          update [--check]                Check or install the latest stable release
+          update [--check] [--force]      Check or install a newer release; --force stops a running service
           --version                       Print the embedded release version
         """;
 
@@ -49,8 +49,15 @@ internal static class Program
         new DeviceLogin(Http, Task.Delay, options.OpenBrowser ? LoginBrowser.OpenAsync : null,
             options.CopyToClipboard ? LoginClipboard.TryCopyAsync : null).SignInAsync(output, ct);
 
-    internal static Task<string> UpdateAsync(bool check, CancellationToken ct) =>
-        new ReleaseUpdate(Http).RunAsync(Version, check ? string.Empty : ServiceLifetime.ApplicationExecutable(), check, GetUpdateLease, ct);
+    internal static Task<string> UpdateAsync(TextWriter prompt, UpdateOptions options, CancellationToken ct)
+    {
+        var executable = options.CheckOnly ? string.Empty : ServiceLifetime.ApplicationExecutable();
+        var handoff = options.Force ? new UpdateHandoff((request, t) =>
+            { RequireSingleFileUpdate(); return Control.SendAsync(request, t); },
+            (question, t) => UpdateHandoff.ConfirmAsync(Console.In, prompt, question, t),
+            () => UpdateHandoff.RestartInstalledAsync(executable, ServiceLifetime.ExitCodeAsync)) : null;
+        return new ReleaseUpdate(Http, handoff).RunAsync(Version, executable, options.CheckOnly, GetUpdateLease, ct);
+    }
 
     private static IDisposable GetUpdateLease()
     {

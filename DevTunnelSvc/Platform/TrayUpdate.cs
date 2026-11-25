@@ -13,27 +13,12 @@ internal sealed class TrayUpdate(Func<CancellationToken, Task<ReleaseInfo?>> fin
     {
         var release = await find(ct);
         if (release is null) return $"DevTunnelSvc is up to date ({current}).";
-        if (!confirm($"Install {release.TagName} (currently {current})?\n\nThis will stop all active port mappings, install the update, and restart DevTunnelSvc. Mappings must be started again."))
+        if (!confirm(UpdateHandoff.Question(current, release.TagName)))
             return null;
 
         ct.ThrowIfCancellationRequested();
         await stop(ct);
-        Exception? installError = null;
-        using var download = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        download.CancelAfter(TimeSpan.FromMinutes(5));
-        try { await install(release, download.Token); }
-        catch (Exception ex) { installError = ex; }
-
-        // Once we have stopped the user's service, restore it even if the download failed or was cancelled.
-        try { await restart(); }
-        catch (Exception ex)
-        {
-            var result = installError is null ? $"Installed {release.TagName}." : $"Update failed: {installError.Message}";
-            throw new InvalidOperationException($"{result}\nThe service could not restart: {ex.Message}\nRun 'devtunnelsvc service start'.", ex);
-        }
-        if (installError is not null)
-            throw new InvalidOperationException($"Update failed: {installError.Message}\nThe service was restarted. Start your port mappings again.", installError);
-        return $"Installed {release.TagName} and restarted DevTunnelSvc. Start your port mappings again.";
+        return await UpdateHandoff.InstallAndRestartAsync(release.TagName, t => install(release, t), restart, ct);
     }
 
     [SupportedOSPlatform("windows")]
@@ -49,9 +34,13 @@ internal sealed class TrayUpdate(Func<CancellationToken, Task<ReleaseInfo?>> fin
             var executable = ServiceLifetime.ApplicationExecutable();
             var flow = new TrayUpdate(t => updater.FindNewerAsync(Program.Version, t), text =>
                 { Program.RequireSingleFileUpdate(); return dialogs.Confirm(text); },
-                t => StopOriginalAsync(service.Id, (r, token) => Control.SendAsync(r, token), service.WaitForExitAsync, t),
-                (release, t) => updater.ApplyAsync(release, executable, () => InstanceLease.Acquire(), t),
-                () => RestartInstalledAsync(executable, ServiceLifetime.ExitCodeAsync));
+                t => UpdateHandoff.StopAsync(service.Id, (r, token) => Control.SendAsync(r, token), t),
+                async (release, t) =>
+                {
+                    await WaitForExitAsync(service.WaitForExitAsync);
+                    await updater.ApplyAsync(release, executable, () => InstanceLease.Acquire(), t);
+                },
+                () => UpdateHandoff.RestartInstalledAsync(executable, ServiceLifetime.ExitCodeAsync));
             return await flow.RunAsync(Program.Version, ct);
         }, dialogs);
     }
@@ -71,20 +60,9 @@ internal sealed class TrayUpdate(Func<CancellationToken, Task<ReleaseInfo?>> fin
         }
     }
 
-    internal static async Task StopOriginalAsync(int servicePid, Func<Request, CancellationToken, Task<string>> send,
-        Func<CancellationToken, Task> waitForExit, CancellationToken ct)
+    internal static async Task WaitForExitAsync(Func<CancellationToken, Task> waitForExit)
     {
-        await send(new("shutdown-for-update", ServicePid: servicePid), ct);
-        using var limit = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        limit.CancelAfter(TimeSpan.FromSeconds(30));
+        using var limit = new CancellationTokenSource(TimeSpan.FromSeconds(30));
         await waitForExit(limit.Token);
-    }
-
-    internal static async Task RestartInstalledAsync(string executable, Func<ProcessStartInfo, CancellationToken, Task<int>> run)
-    {
-        // Use the installed CLI's own readiness check: its pipe protocol may be newer than this helper's.
-        using var limit = new CancellationTokenSource(TimeSpan.FromMinutes(2));
-        var code = await run(new ProcessStartInfo(executable, ["service", "start"]) { CreateNoWindow = true }, limit.Token);
-        if (code != 0) throw new InvalidOperationException($"The installed 'service start' command exited with code {code}.");
     }
 }

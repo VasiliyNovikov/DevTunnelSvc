@@ -6,25 +6,26 @@ using System.Runtime.Versioning;
 
 namespace DevTunnelSvc.Platform;
 
-internal sealed partial class TrayMenu(TrayMenu.Popup popup, Action exit, Func<Process> launchUpdate, TrayMenu.Dialogs dialogs) : IDisposable
+internal sealed partial class TrayMenu(TrayMenu.Popup popup, Action exit, Func<Process> launchUpdate, TrayMenu.Dialogs dialogs,
+    Action<nint, nint, string> about) : IDisposable
 {
     internal const string UpdateWorker = "__tray-update";
     internal enum Command : uint { None, Update, About, Exit }
     internal delegate bool Append(nint menu, uint flags, nuint id, string? text);
     internal delegate uint Track(nint menu, uint flags, int x, int y, nint owner, nint parameters);
-    internal sealed record Popup(Func<nint> Create, Append Add, Func<nint, Point> Anchor, Func<nint, bool> Foreground,
+    internal sealed record Popup(Action PrepareTheme, Func<nint> Create, Append Add, Func<nint, Point> Anchor, Func<nint, bool> Foreground,
         Track TrackAt, TrayIcon.Post Post, Func<nint, bool> Destroy);
     private Process? updater;
     private bool showing;
 
     [SupportedOSPlatform("windows")]
-    internal static TrayMenu Create(Action exit) => new(SystemPopup, exit, LaunchUpdater, SystemDialogs);
+    internal static TrayMenu Create(Action exit) => new(SystemPopup, exit, LaunchUpdater, SystemDialogs, AboutDialog.Show);
 
     [SupportedOSPlatform("windows")]
-    internal static Popup SystemPopup => new(CreatePopupMenu, AppendMenuW, IconAnchor, SetForegroundWindow,
+    internal static Popup SystemPopup => new(WindowsTheme.SystemTheme.PrepareMenu, CreatePopupMenu, AppendMenuW, IconAnchor, SetForegroundWindow,
         TrackPopupMenuEx, TrayIcon.PostMessageW, DestroyMenu);
 
-    internal void Show(nint owner)
+    internal void Show(nint owner, nint icon)
     {
         if (showing) return;
         showing = true;
@@ -39,7 +40,7 @@ internal sealed partial class TrayMenu(TrayMenu.Popup popup, Action exit, Func<P
                     updater = launchUpdate();
                     break;
                 case Command.About:
-                    dialogs.Inform(owner, "About DevTunnelSvc", $"DevTunnelSvc {Program.Version}\n\nHosts and forwards Microsoft Dev Tunnels for your Windows user.");
+                    about(owner, icon, $"DevTunnelSvc {Program.Version}\r\n\r\nHosts and forwards Microsoft Dev Tunnels for your Windows user.");
                     break;
                 case Command.Exit:
                     exit();
@@ -55,6 +56,7 @@ internal sealed partial class TrayMenu(TrayMenu.Popup popup, Action exit, Func<P
 
     private Command Choose(nint owner, bool updating)
     {
+        popup.PrepareTheme();
         var menu = popup.Create();
         if (menu == 0) throw new Win32Exception(Marshal.GetLastPInvokeError());
         try

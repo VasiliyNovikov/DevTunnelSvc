@@ -13,7 +13,7 @@ internal sealed record ReleaseAsset(string Name, long Size, string? Digest);
 [JsonSerializable(typeof(ReleaseInfo))]
 internal sealed partial class ReleaseJson : JsonSerializerContext;
 
-internal sealed class ReleaseUpdate(HttpClient http)
+internal sealed class ReleaseUpdate(HttpClient http, UpdateHandoff? force = null)
 {
     private const string Repo = "VasiliyNovikov/DevTunnelSvc";
     private const int MaxBytes = 256 * 1024 * 1024;
@@ -26,6 +26,16 @@ internal sealed class ReleaseUpdate(HttpClient http)
             return $"Already up to date ({current}).";
         if (checkOnly)
             return $"Available: {release.TagName} (installed: {current}).";
+        if (force is not null)
+        {
+            var result = await force.ApplyIfRunningAsync(current, release.TagName, async token =>
+            {
+                using var lease = await UpdateHandoff.WaitForLeaseAsync(acquireUpdateLease, Task.Delay);
+                token.ThrowIfCancellationRequested();
+                await DownloadAndInstallAsync(release, executable, token);
+            }, ct);
+            if (result is not null) return result;
+        }
         await ApplyAsync(release, executable, acquireUpdateLease, ct);
         return $"Installed {release.TagName}. Run 'service start' to restart the service.";
     }
@@ -40,6 +50,11 @@ internal sealed class ReleaseUpdate(HttpClient http)
     internal async Task ApplyAsync(ReleaseInfo release, string executable, Func<IDisposable> acquireUpdateLease, CancellationToken ct)
     {
         using var lease = acquireUpdateLease();
+        await DownloadAndInstallAsync(release, executable, ct);
+    }
+
+    private async Task DownloadAndInstallAsync(ReleaseInfo release, string executable, CancellationToken ct)
+    {
         var name = AssetName(OperatingSystem.IsWindows(), RuntimeInformation.ProcessArchitecture);
         var asset = release.Assets.SingleOrDefault(a => a.Name == name)
             ?? throw new InvalidDataException($"Release {release.TagName} has no {name} asset.");

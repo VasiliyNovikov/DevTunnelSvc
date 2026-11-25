@@ -186,8 +186,10 @@ public sealed class ServiceTests : IDisposable
                     () => Send(new("shutdown-for-update", ServicePid: pid)))).Message);
             Assert.IsFalse(backend.Sessions.Single().Disposed);
             Assert.Contains("host:blue-tunnel", await Send(new("status")));
-            await TrayUpdate.StopOriginalAsync(Environment.ProcessId, (request, t) => Control.SendAsync(request, t, name),
-                t => server.WaitAsync(t), limit.Token);
+            var target = await Send(new("service-pid"));
+            Assert.AreEqual(Environment.ProcessId.ToString(System.Globalization.CultureInfo.InvariantCulture), target);
+            await DevTunnelSvc.Updates.UpdateHandoff.StopAsync(Environment.ProcessId, (request, t) => Control.SendAsync(request, t, name), limit.Token);
+            await server.WaitAsync(limit.Token);
             Assert.IsTrue(backend.Sessions.Single().Disposed);
             Assert.AreEqual("test-only-token", await credential.RequireTokenAsync(limit.Token));
         }

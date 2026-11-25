@@ -8,10 +8,11 @@ using DevTunnelSvc.Tunnels;
 namespace DevTunnelSvc;
 
 internal readonly record struct LoginOptions(bool OpenBrowser, bool CopyToClipboard);
+internal readonly record struct UpdateOptions(bool CheckOnly, bool Force);
 
 internal sealed record LocalActions(
     Func<TextWriter, LoginOptions, CancellationToken, Task<GitHubCredential>> Login,
-    Func<bool, CancellationToken, Task<string>> Update,
+    Func<TextWriter, UpdateOptions, CancellationToken, Task<string>> Update,
     Func<CancellationToken, Task<string>> Start,
     Func<CancellationToken, Task<string>> Install,
     Func<TextWriter, CancellationToken, Task> Run)
@@ -33,10 +34,7 @@ internal sealed class Commands(TextWriter output, TextWriter error, Func<Request
         root.Subcommands.Add(Forward(true));
         root.Subcommands.Add(Forward(false));
         root.Subcommands.Add(Service());
-        var check = new Option<bool>("--check");
-        var update = Action("update", (r, ct) => localActions.Update(r.GetValue(check), ct));
-        update.Options.Add(check);
-        root.Subcommands.Add(update);
+        root.Subcommands.Add(Update());
         if (OperatingSystem.IsWindows()) root.Subcommands.Add(TrayUpdateCommand());
         var parsed = root.Parse(args);
         if (parsed.Errors.Count != 0)
@@ -60,6 +58,16 @@ internal sealed class Commands(TextWriter output, TextWriter error, Func<Request
         var command = new Command(TrayMenu.UpdateWorker) { Hidden = true };
         command.Arguments.Add(pid);
         command.SetAction((r, ct) => TrayUpdate.FromMenuAsync(r.GetRequiredValue(pid), ct));
+        return command;
+    }
+
+    private Command Update()
+    {
+        var check = new Option<bool>("--check") { Description = "Check for a newer release without installing it or stopping the service." };
+        var force = new Option<bool>("--force") { Description = "Ask before stopping a running service and its mappings to install a newer release, then restart it." };
+        var command = Action("update", (r, ct) => localActions.Update(error, new(r.GetValue(check), r.GetValue(force)), ct));
+        command.Options.Add(check);
+        command.Options.Add(force);
         return command;
     }
 

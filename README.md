@@ -90,16 +90,16 @@ If upgrading from a memory-only build, stop the old service before replacing the
 
 `status` lists mapping names and SDK connection states. `stop NAME` removes one mapping. `delete TUNNEL` deletes the cloud tunnel explicitly; stopping a mapping does not. V1 supports one hosted mapping per tunnel at a time. Mappings are still in memory: after a restart reissue `host` or `connect`, not `login`.
 
-<img src="DevTunnelSvc/Assets/devtunnelsvc.png" width="32" height="32" alt="Teal tunnel and outbound arrow"> On Windows, right-click the notification-area icon for **Update**, **About**, or **Exit**. Update checks for a newer stable release before asking for confirmation. Confirming stops all active port mappings, installs the verified release, and restarts the service. Start your mappings again afterward. About shows the running version; Exit stops the service and its mappings without signing you out or removing its startup registration.
+<img src="DevTunnelSvc/Assets/devtunnelsvc.png" width="32" height="32" alt="Teal tunnel and outbound arrow"> On Windows, right-click the notification-area icon for **Update**, **About**, or **Exit**. The menu and About dialog follow the Windows app theme and respect high contrast; older Windows versions use the native menu colors. **About** shows the running version. **Exit** stops the service and its mappings without signing you out or removing its startup registration.
 
 ```shell
 devtunnelsvc update --check
-devtunnelsvc service stop
-devtunnelsvc update
-devtunnelsvc service start
+devtunnelsvc update --force
 ```
 
-`update` selects the latest stable asset for the installed OS and architecture and verifies its GitHub SHA-256 digest before replacing the executable. It refuses to update a running service. `service run` runs the service in the foreground for diagnostics. Linux requires a running systemd user manager for `install` and `start`. To keep the service running after the last login session ends, configure user lingering according to your system policy.
+On both platforms, `update --check` only reports availability. `update --force` and the Windows tray's **Update** action check for a newer stable release first. If the service is running, they ask before stopping it, verify the release asset's SHA-256 digest, install it, and restart the service. **Start your port mappings again afterward**; the saved sign-in is preserved. If you're already up to date, nothing is stopped or reinstalled. A stopped service stays stopped after a CLI update.
+
+Plain `update` never stops a running service. To control downtime yourself, run `devtunnelsvc service stop`, `devtunnelsvc update`, then `devtunnelsvc service start`. `service run` runs in the foreground for diagnostics. Linux requires a running systemd user manager for `install` and `start`. To keep the service running after the last login session ends, configure user lingering according to your system policy.
 
 To uninstall, run `devtunnelsvc logout` to remove the credential, then stop the service. On Windows remove the `DevTunnelSvc` value from `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`. On Linux run `systemctl --user disable devtunnelsvc.service`, remove `devtunnelsvc.service` from your systemd user configuration directory, and run `systemctl --user daemon-reload`. Then remove the downloaded executable.
 

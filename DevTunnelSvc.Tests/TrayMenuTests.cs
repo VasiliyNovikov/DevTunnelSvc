@@ -15,18 +15,18 @@ public sealed class TrayMenuTests
         var stub = new PopupStub();
         using var menu = stub.Menu;
         stub.Select = TrayMenu.Command.None;
-        menu.Show(11);
+        menu.Show(11, 12);
         Assert.AreEqual("Update,About,---,Exit", string.Join(',', stub.Labels));
-        Assert.AreEqual("foreground,track,post,destroy", string.Join(',', stub.Tracking));
+        Assert.AreEqual("theme,create,foreground,track,post,destroy", string.Join(',', stub.Tracking));
         Assert.AreEqual(0u, stub.UpdateFlags);
         Assert.IsEmpty(stub.Actions);
         stub.Select = TrayMenu.Command.About;
-        menu.Show(11);
-        Assert.Contains("About DevTunnelSvc", stub.Actions.Single());
+        menu.Show(11, 12);
+        Assert.StartsWith("about:DevTunnelSvc", stub.Actions.Single());
         Assert.Contains(Program.Version, stub.Actions.Single());
         Assert.Contains("Microsoft Dev Tunnels", stub.Actions.Single());
         stub.Select = TrayMenu.Command.Exit;
-        menu.Show(11);
+        menu.Show(11, 12);
         Assert.AreEqual("exit", stub.Actions.Last());
         Assert.AreEqual(3, stub.Destroyed);
     }
@@ -36,17 +36,17 @@ public sealed class TrayMenuTests
     {
         var stub = new PopupStub { Select = TrayMenu.Command.Update, LaunchFails = true };
         using var menu = stub.Menu;
-        menu.Show(11);
+        menu.Show(11, 12);
         Assert.AreEqual("error:Cannot launch updater.", stub.Actions.Last());
         stub.LaunchFails = false;
-        menu.Show(11);
-        menu.Show(11);
+        menu.Show(11, 12);
+        menu.Show(11, 12);
         Assert.AreEqual("error:Cannot launch updater.,update", string.Join(',', stub.Actions));
         Assert.AreEqual(1u, stub.UpdateFlags);
 
         stub.Select = TrayMenu.Command.Exit;
         stub.BrokenItem = "About";
-        menu.Show(11);
+        menu.Show(11, 12);
         Assert.StartsWith("error:", stub.Actions.Last());
         Assert.DoesNotContain("exit", stub.Actions);
         Assert.AreEqual(4, stub.Destroyed);
@@ -57,12 +57,12 @@ public sealed class TrayMenuTests
     {
         var stub = new PopupStub { Select = TrayMenu.Command.About };
         using var menu = stub.Menu;
-        stub.WhileTracking = () => menu.Show(11);
-        menu.Show(11);
+        stub.WhileTracking = () => menu.Show(11, 12);
+        menu.Show(11, 12);
         Assert.HasCount(1, stub.Actions);
         Assert.AreEqual(1, stub.Destroyed);
         stub.CannotCreate = true;
-        menu.Show(11);
+        menu.Show(11, 12);
         Assert.StartsWith("error:", stub.Actions.Last());
         Assert.AreEqual(1, stub.Destroyed);
     }
@@ -135,17 +135,11 @@ public sealed class TrayMenuTests
         using var limit = new CancellationTokenSource(TimeSpan.FromSeconds(5));
         var exit = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var waiting = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var stop = TrayUpdate.StopOriginalAsync(451, (r, _) =>
-        {
-            Assert.AreEqual(new DevTunnelSvc.Service.Request("shutdown-for-update", ServicePid: 451), r);
-            return Task.FromResult("Service stopping.");
-        }, token => { Assert.IsTrue(token.CanBeCanceled); waiting.SetResult(); return exit.Task.WaitAsync(token); }, limit.Token);
+        var stop = TrayUpdate.WaitForExitAsync(token => { Assert.IsTrue(token.CanBeCanceled); waiting.SetResult(); return exit.Task.WaitAsync(token); });
         await waiting.Task.WaitAsync(limit.Token);
         Assert.IsFalse(stop.IsCompleted);
         exit.SetResult();
         await stop.WaitAsync(limit.Token);
-        await Assert.ThrowsExactlyAsync<IOException>(() => TrayUpdate.StopOriginalAsync(451,
-            (_, _) => throw new IOException("shutdown refused"), _ => throw new AssertFailedException(), limit.Token));
     }
 
     [TestMethod]
@@ -161,9 +155,9 @@ public sealed class TrayMenuTests
             Assert.IsTrue(ct.CanBeCanceled);
             return Task.FromResult(result);
         }
-        await TrayUpdate.RestartInstalledAsync(installed, Start);
+        await UpdateHandoff.RestartInstalledAsync(installed, Start);
         result = 17;
-        var failure = await Assert.ThrowsExactlyAsync<InvalidOperationException>(() => TrayUpdate.RestartInstalledAsync(installed, Start));
+        var failure = await Assert.ThrowsExactlyAsync<InvalidOperationException>(() => UpdateHandoff.RestartInstalledAsync(installed, Start));
         Assert.Contains("service start", failure.Message);
         Assert.Contains("17", failure.Message);
     }
@@ -267,7 +261,7 @@ public sealed class TrayMenuTests
             },
         };
         var actions = new TrayMenu(popup, () => exits++, () => throw new AssertFailedException(),
-            new((_, text, _, _) => throw new AssertFailedException(text)));
+            new((_, text, _, _) => throw new AssertFailedException(text)), (_, _, _) => Assert.Fail());
         using var window = TrayIcon.OpenWindowsWindow(actions);
         owner = window.Handle;
         Assert.IsTrue(TrayIcon.PostMessageW(owner, TrayIcon.CallbackMessage, 0, (1 << 16) | 0x7B));
@@ -292,7 +286,7 @@ public sealed class TrayMenuTests
         public int Destroyed { get; private set; }
         public uint UpdateFlags { get; private set; }
 
-        public TrayMenu Menu => new(new(() => { Labels.Clear(); return CannotCreate ? 0 : 77; }, Add, owner =>
+        public TrayMenu Menu => new(new(() => Tracking.Add("theme"), () => { Labels.Clear(); Tracking.Add("create"); return CannotCreate ? 0 : 77; }, Add, owner =>
         {
             Assert.AreEqual((nint)11, owner);
             return new() { X = -30, Y = 240 };
@@ -323,7 +317,11 @@ public sealed class TrayMenuTests
             Assert.AreEqual((nint)11, owner);
             Actions.Add((flags & 0x10) != 0 ? $"error:{text}" : $"{title}: {text}");
             return 1;
-        }));
+        }), (owner, icon, text) =>
+        {
+            Assert.AreEqual(((nint)11, (nint)12), (owner, icon));
+            Actions.Add($"about:{text}");
+        });
 
         private bool Add(nint m, uint flags, nuint id, string? text)
         {
