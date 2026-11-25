@@ -5,7 +5,36 @@
 
 DevTunnelSvc hosts and connects to private Microsoft Dev Tunnels on Windows and Linux. A per-user background service owns the SDK connections, so closing the CLI does not stop your forwards.
 
-## Download and run
+## Install
+
+Run the matching command as the user who will use the tunnels, **without sudo or an elevated PowerShell**. The installer downloads the latest stable GitHub Release for your architecture, checks its size and SHA-256 digest, registers and starts the per-user service, and immediately runs GitHub device login if you're signed out. Approve the sign-in yourself in a browser. You can inspect the [Linux script](install.sh) or [Windows script](install.ps1) before running it.
+
+**Linux** (glibc 2.28+, `sh`, `curl`, `jq`, GNU coreutils, and a running systemd user manager):
+
+```sh
+curl -fsSL --proto '=https' --proto-redir '=https' https://raw.githubusercontent.com/VasiliyNovikov/DevTunnelSvc/main/install.sh | sh
+```
+
+**Windows** (PowerShell 7 recommended, Windows PowerShell 5.1 also supported):
+
+```powershell
+Invoke-RestMethod -ErrorAction Stop https://raw.githubusercontent.com/VasiliyNovikov/DevTunnelSvc/main/install.ps1 | Invoke-Expression
+```
+
+Linux installs to `~/.local/bin/devtunnelsvc`; add `~/.local/bin` to your shell's `PATH` if needed. Windows installs to `%LOCALAPPDATA%\Programs\DevTunnelSvc\devtunnelsvc.exe` and adds that directory to the current PowerShell session and per-user `PATH`. If another terminal still has the old `PATH`, use the printed install path until the next sign-in. Re-running an installer reuses a matching binary and does not sign you out or stop active mappings. For a different existing version, use the [CLI updater](#stop-update-and-remove) instead.
+
+### Install with a coding agent
+
+Use the copy button on this block and paste the prompt into your agent:
+
+```text
+Install DevTunnelSvc for my current user on this machine. Detect the OS and run only its official installer, without sudo or elevation:
+Linux (sh): curl -fsSL --proto '=https' --proto-redir '=https' https://raw.githubusercontent.com/VasiliyNovikov/DevTunnelSvc/main/install.sh | sh
+Windows (PowerShell): Invoke-RestMethod -ErrorAction Stop https://raw.githubusercontent.com/VasiliyNovikov/DevTunnelSvc/main/install.ps1 | Invoke-Expression
+The installer registers and starts my per-user service and begins GitHub device login if needed. Let me complete authorization in the browser; do not request my password or access/refresh tokens. If setup fails, show the error rather than bypassing verification or replacing an existing installation. After I finish signing in, run devtunnelsvc --version and devtunnelsvc status (use the printed install path if necessary) and tell me the version and sign-in state.
+```
+
+### Manual download
 
 Choose an asset from [GitHub Releases](https://github.com/VasiliyNovikov/DevTunnelSvc/releases). V1 uses **self-contained, single-file ReadyToRun** with the official C# SDK. It includes the .NET runtime and can JIT code; no separate .NET installation is needed. The bundle extracts native runtime libraries to a per-user cache on first launch.
 
@@ -18,7 +47,7 @@ Keep the executable in a stable, user-writable location on `PATH`. On Windows, e
 
 ## Forward an application
 
-On **both machines**, run these commands as the user who will own the service. `service install` registers the Windows tray process at sign-in or installs and enables the Linux systemd **user** unit. Use the same GitHub account on both machines for this example.
+Install on **both machines** and use the same GitHub account for this example. If you downloaded the binary manually, run the following setup commands; the one-line installers already run them. `service install` registers the Windows tray process at sign-in or installs and enables the Linux systemd **user** unit.
 
 ```shell
 devtunnelsvc service install

@@ -23,6 +23,13 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v6
+      - name: Test piped Linux installer
+        if: runner.os == 'Linux'
+        run: sh eng/test-install.sh
+      - name: Test piped Windows installer
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: .\eng\test-install.ps1
       - uses: actions/setup-dotnet@v5
         with:
           dotnet-version: '11.0.x'
