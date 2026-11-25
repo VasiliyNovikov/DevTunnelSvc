@@ -13,9 +13,10 @@ internal static class ServiceLifetime
     private const string Unit = "devtunnelsvc.service";
     private const string StartupKey = @"Software\Microsoft\Windows\CurrentVersion\Run";
 
-    public static Task RunAsync(TextWriter log, CancellationToken ct) => RunAsync(log, Control.PipeName, null, ct, TrayLifetime.ForCurrentPlatform);
+    public static Task RunAsync(TextWriter log, CancellationToken ct) =>
+        RunAsync(log, Control.PipeName, InstanceLease.DefaultDirectory, ct, TrayLifetime.ForCurrentPlatform);
 
-    internal static async Task RunAsync(TextWriter log, string name, string? stateDirectory, CancellationToken ct,
+    internal static async Task RunAsync(TextWriter log, string name, string stateDirectory, CancellationToken ct,
         Func<Action<Exception?>, IDisposable>? createTray = null)
     {
         using var instance = InstanceLease.Acquire(stateDirectory);
@@ -25,7 +26,7 @@ internal static class ServiceLifetime
         using var tray = new TrayLifetime(createTray);
         using var http = GitHubOAuth.CreateClient();
         http.Timeout = TimeSpan.FromSeconds(20);
-        using var credential = new SessionCredential(new CredentialFile(stateDirectory ?? InstanceLease.DefaultDirectory),
+        using var credential = new SessionCredential(new CredentialFile(stateDirectory),
             (token, tokenCt) => GitHubOAuth.RefreshAsync(http, token, tokenCt), TimeProvider.System);
         await using var backend = new TunnelBackend(() => credential.RequireTokenAsync(lifetime.Token));
         await using var service = new TunnelService(backend, credential);
@@ -33,7 +34,7 @@ internal static class ServiceLifetime
     }
 
     public static Task<string> StartAsync(CancellationToken ct) => StartAsync(OperatingSystem.IsWindows(),
-        t => Control.SendAsync(new("status"), t), LaunchAsync, ct);
+        t => Control.SendAsync(new("status"), Control.PipeName, t), LaunchAsync, ct);
 
     internal static async Task<string> StartAsync(bool checkExisting, Func<CancellationToken, Task<string>> status,
         Func<CancellationToken, Task> launch, CancellationToken ct)

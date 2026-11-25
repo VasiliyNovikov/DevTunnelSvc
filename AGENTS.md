@@ -48,7 +48,7 @@ The CLI sends bounded, versioned messages to a same-user named pipe. `TunnelServ
 
 The invoking CLI, not the service, owns the browser and clipboard interaction. Only GitHub's `user_code` may be copied, never the `device_code` or access token. Login tests use a substitute clipboard, not the developer's desktop.
 
-The service owns the saved GitHub grant. Serialize refresh, replacement, and logout: GitHub invalidates the previous grant on rotation. Persist the new pair atomically before giving its token to the SDK. Shutdown disposes mappings but must not delete the grant; logout must. Use temporary credential directories and synthetic tokens in tests, never a developer's real store.
+The service owns the saved GitHub grant. Serialize refresh, replacement, and logout: GitHub invalidates the previous grant on rotation. Persist the new pair atomically before giving its token to the SDK. Shutdown disposes mappings but must not delete the grant; logout must. Use temporary credential directories and synthetic tokens in tests, never a developer's real store. Wire real per-user resources (the control pipe, state directory, and local CLI actions) only in `Main` and the public production overloads; internals that tests call take them as required arguments. Stryker removes the left operand of `testValue ?? realDefault`, so such a fallback lets a local mutation run drive the developer's running service and overwrite their saved sign-in.
 
 ```shell
 dotnet build DevTunnelSvc.slnx

@@ -25,9 +25,9 @@ internal static class Control
     internal const PipeOptions Options = PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly;
     private const int MaxFrame = 32 * 1024;
 
-    public static async Task<string> SendAsync(Request request, CancellationToken cancellation, string? pipeName = null)
+    public static async Task<string> SendAsync(Request request, string pipeName, CancellationToken cancellation)
     {
-        using var pipe = new NamedPipeClientStream(".", pipeName ?? PipeName, PipeDirection.InOut, Options,
+        using var pipe = new NamedPipeClientStream(".", pipeName, PipeDirection.InOut, Options,
             System.Security.Principal.TokenImpersonationLevel.Identification);
         using var limit = CancellationTokenSource.CreateLinkedTokenSource(cancellation);
         limit.CancelAfter(TimeSpan.FromSeconds(65));

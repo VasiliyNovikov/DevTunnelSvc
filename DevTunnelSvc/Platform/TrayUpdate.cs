@@ -34,11 +34,11 @@ internal sealed class TrayUpdate(Func<CancellationToken, Task<ReleaseInfo?>> fin
             var executable = ServiceLifetime.ApplicationExecutable();
             var flow = new TrayUpdate(t => updater.FindNewerAsync(Program.Version, t), text =>
                 { Program.RequireSingleFileUpdate(); return dialogs.Confirm(text); },
-                t => UpdateHandoff.StopAsync(service.Id, (r, token) => Control.SendAsync(r, token), t),
+                t => UpdateHandoff.StopAsync(service.Id, (r, token) => Control.SendAsync(r, Control.PipeName, token), t),
                 async (release, t) =>
                 {
                     await WaitForExitAsync(service.WaitForExitAsync);
-                    await updater.ApplyAsync(release, executable, () => InstanceLease.Acquire(), t);
+                    await updater.ApplyAsync(release, executable, () => InstanceLease.Acquire(InstanceLease.DefaultDirectory), t);
                 },
                 () => UpdateHandoff.StartInstalledAsync(executable, ServiceLifetime.ExitCodeAsync));
             return await flow.RunAsync(Program.Version, ct);

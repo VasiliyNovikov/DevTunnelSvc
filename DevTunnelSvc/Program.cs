@@ -26,10 +26,14 @@ internal static class Program
 
     internal static string Version => typeof(Program).Assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()!.InformationalVersion;
     private static readonly HttpClient Http = GitHubOAuth.CreateClient();
-    private static Task<int> Main(string[] args) => RunAsync(args, Console.Out, Console.Error);
+
+    // Only the entry point wires the real service pipe and local actions. Shared code has no fallback to them,
+    // so neither a test nor a mutant of shared code can reach a developer's running service or credentials.
+    private static Task<int> Main(string[] args) => RunAsync(args, Console.Out, Console.Error,
+        (request, ct) => Control.SendAsync(request, Control.PipeName, ct), LocalActions.Default);
 
     internal static async Task<int> RunAsync(string[] args, TextWriter output, TextWriter error,
-        Func<Request, CancellationToken, Task<string>>? send = null, LocalActions? actions = null)
+        Func<Request, CancellationToken, Task<string>> send, LocalActions actions)
     {
         if (args is [] or ["-h"] or ["--help"])
         {
@@ -43,7 +47,7 @@ internal static class Program
             return 0;
         }
 
-        try { return await new Commands(output, error, send ?? ((r, ct) => Control.SendAsync(r, ct)), actions ?? LocalActions.Default).InvokeAsync(args); }
+        try { return await new Commands(output, error, send, actions).InvokeAsync(args); }
         catch (OperationCanceledException) { error.WriteLine("Operation cancelled or timed out."); return 1; }
         catch (Exception ex) { error.WriteLine(ex.Message); return 1; }
     }
@@ -56,7 +60,7 @@ internal static class Program
     {
         var executable = options.CheckOnly ? string.Empty : ServiceLifetime.ApplicationExecutable();
         var handoff = options.Force ? new UpdateHandoff((request, t) =>
-            { RequireSingleFileUpdate(); return Control.SendAsync(request, t); },
+            { RequireSingleFileUpdate(); return Control.SendAsync(request, Control.PipeName, t); },
             () => UpdateHandoff.StartInstalledAsync(executable, ServiceLifetime.ExitCodeAsync)) : null;
         return new ReleaseUpdate(Http, handoff).RunAsync(Version, executable, options.CheckOnly, GetUpdateLease, ct);
     }
@@ -64,7 +68,7 @@ internal static class Program
     private static IDisposable GetUpdateLease()
     {
         RequireSingleFileUpdate();
-        return InstanceLease.Acquire();
+        return InstanceLease.Acquire(InstanceLease.DefaultDirectory);
     }
 
     [System.Diagnostics.CodeAnalysis.UnconditionalSuppressMessage("SingleFile", "IL3000", Justification = "An empty Location identifies the supported single-file installation.")]

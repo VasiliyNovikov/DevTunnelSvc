@@ -31,7 +31,7 @@ public sealed class ServiceTests : IDisposable
         using var limit = new CancellationTokenSource(TimeSpan.FromSeconds(15));
         using var log = new StringWriter();
         var server = ControlServer.RunAsync(name, state, log, limit.Token);
-        Task<string> Send(Request r, CancellationToken ct) => Control.SendAsync(r, ct, name);
+        Task<string> Send(Request r, CancellationToken ct) => Control.SendAsync(r, name, ct);
         try
         {
             Assert.Contains("signed out", await Send(new("status"), limit.Token));
@@ -40,8 +40,8 @@ public sealed class ServiceTests : IDisposable
             Assert.AreEqual("blue-tunnel.use2", await Send(new("create"), limit.Token));
             using var output = new StringWriter();
             using var error = new StringWriter();
-            Assert.AreEqual(0, await Program.RunAsync(["host", "blue-tunnel.use2", "--tunnel-port", "8080", "--target-port", "3000"], output, error, Send));
-            Assert.AreEqual(0, await Program.RunAsync(["connect", "blue-tunnel.use2", "--tunnel-port", "8080", "--listen-port", "5000"], output, error, Send));
+            Assert.AreEqual(0, await Cli.RunAsync(["host", "blue-tunnel.use2", "--tunnel-port", "8080", "--target-port", "3000"], output, error, Send));
+            Assert.AreEqual(0, await Cli.RunAsync(["connect", "blue-tunnel.use2", "--tunnel-port", "8080", "--listen-port", "5000"], output, error, Send));
             Assert.Contains("connect:blue-tunnel.use2:5000", output.ToString());
             Assert.Contains("host:blue-tunnel.use2", output.ToString());
             Assert.IsEmpty(error.ToString());
@@ -53,10 +53,10 @@ public sealed class ServiceTests : IDisposable
             Assert.Contains("blue-tunnel.use2:8080 -> localhost:3000", status);
             Assert.DoesNotContain("test-credential", status);
             Assert.Contains("Stop", (await Assert.ThrowsExactlyAsync<InvalidOperationException>(() => Send(new("delete", "blue-tunnel.use2"), limit.Token))).Message);
-            Assert.AreEqual(0, await Program.RunAsync(["stop", "host:blue-tunnel.use2"], output, error, Send));
+            Assert.AreEqual(0, await Cli.RunAsync(["stop", "host:blue-tunnel.use2"], output, error, Send));
             Assert.IsTrue(backend.Sessions[0].Disposed);
             Assert.IsFalse(backend.Sessions[1].Disposed);
-            Assert.AreEqual(0, await Program.RunAsync(["logout"], output, error, Send));
+            Assert.AreEqual(0, await Cli.RunAsync(["logout"], output, error, Send));
             Assert.Contains("Signed out", output.ToString());
             Assert.Contains("signed out", await Send(new("status"), limit.Token));
             Assert.IsTrue(backend.Sessions[1].Disposed);
@@ -74,7 +74,7 @@ public sealed class ServiceTests : IDisposable
         await state.ExecuteAsync(new("login", SignIn: new("token")), CancellationToken.None);
         using var output = new StringWriter();
         using var error = new StringWriter();
-        Assert.AreNotEqual(0, await Program.RunAsync(["connect", "blue-tunnel.use2", "--tunnel-port", "8080", "--listen-port", "5000"], output, error, state.ExecuteAsync));
+        Assert.AreNotEqual(0, await Cli.RunAsync(["connect", "blue-tunnel.use2", "--tunnel-port", "8080", "--listen-port", "5000"], output, error, state.ExecuteAsync));
         Assert.Contains("permission denied", error.ToString());
         Assert.DoesNotContain("blue-tunnel", await state.ExecuteAsync(new("status"), CancellationToken.None));
         foreach (var request in new[] { new Request("host", "blue-tunnel.use2", 0, 3000), new("connect", "blue-tunnel.use2", 8080, 65536), new("connect", "bad/id.use2", 1, 2) })
@@ -110,15 +110,15 @@ public sealed class ServiceTests : IDisposable
         await using var service = new TunnelService(backend, credential);
         using var output = new StringWriter();
         using var error = new StringWriter();
-        Assert.AreEqual(1, await Program.RunAsync(["list"], output, error, service.ExecuteAsync));
+        Assert.AreEqual(1, await Cli.RunAsync(["list"], output, error, service.ExecuteAsync));
         Assert.Contains("Run 'login' first", error.ToString());
         Assert.IsEmpty(output.ToString());
         await service.ExecuteAsync(new("login", SignIn: new("token")), CancellationToken.None);
-        Assert.AreEqual(0, await Program.RunAsync(["list"], output, error, service.ExecuteAsync));
+        Assert.AreEqual(0, await Cli.RunAsync(["list"], output, error, service.ExecuteAsync));
         Assert.AreEqual("No tunnels found. Run 'create' to create one." + Environment.NewLine, output.ToString());
         output.GetStringBuilder().Clear();
         backend.Tunnels.Add(new("blue-tunnel.use2", 1, null, null, [8080]));
-        Assert.AreEqual(0, await Program.RunAsync(["list"], output, error, service.ExecuteAsync));
+        Assert.AreEqual(0, await Cli.RunAsync(["list"], output, error, service.ExecuteAsync));
         Assert.AreEqual(string.Join(Environment.NewLine, "TUNNEL            HOSTS  CLIENTS  EXPIRES  PORTS",
             "blue-tunnel.use2  1      -        -        8080", ""), output.ToString());
     }
@@ -143,12 +143,12 @@ public sealed class ServiceTests : IDisposable
         foreach (var command in remoteCommands)
         {
             error.GetStringBuilder().Clear();
-            Assert.AreEqual(1, await Program.RunAsync(command, output, error, service.ExecuteAsync));
+            Assert.AreEqual(1, await Cli.RunAsync(command, output, error, service.ExecuteAsync));
             Assert.Contains("Run 'login' first", error.ToString());
         }
         await service.ExecuteAsync(new("login", SignIn: new("token")), CancellationToken.None);
         foreach (var command in remoteCommands.Append(["create"]))
-            Assert.AreEqual(0, await Program.RunAsync(command, output, error, service.ExecuteAsync));
+            Assert.AreEqual(0, await Cli.RunAsync(command, output, error, service.ExecuteAsync));
         // Fastest first, ties by name, unmeasured last; no footer without a recommended region.
         Assert.AreEqual(string.Join(Environment.NewLine,
             "REGION  LOCATION     LATENCY  AVAILABILITY  LOAD  REASON",
@@ -235,7 +235,7 @@ public sealed class ServiceTests : IDisposable
         var name = $"DevTunnelSvc-tray-update-{Guid.NewGuid():N}";
         using var limit = new CancellationTokenSource(TimeSpan.FromSeconds(10));
         var server = ControlServer.RunAsync(name, state, TextWriter.Null, limit.Token);
-        Task<string> Send(Request r) => Control.SendAsync(r, limit.Token, name);
+        Task<string> Send(Request r) => Control.SendAsync(r, name, limit.Token);
         try
         {
             await Send(new("login", SignIn: new("test-only-token")));
@@ -247,7 +247,7 @@ public sealed class ServiceTests : IDisposable
             Assert.Contains("host:blue-tunnel", await Send(new("status")));
             var target = await Send(new("service-pid"));
             Assert.AreEqual(Environment.ProcessId.ToString(System.Globalization.CultureInfo.InvariantCulture), target);
-            await DevTunnelSvc.Updates.UpdateHandoff.StopAsync(Environment.ProcessId, (request, t) => Control.SendAsync(request, t, name), limit.Token);
+            await DevTunnelSvc.Updates.UpdateHandoff.StopAsync(Environment.ProcessId, (request, t) => Control.SendAsync(request, name, t), limit.Token);
             await server.WaitAsync(limit.Token);
             Assert.IsTrue(backend.Sessions.Single().Disposed);
             Assert.AreEqual("test-only-token", await credential.RequireTokenAsync(limit.Token));
@@ -270,9 +270,9 @@ public sealed class ServiceTests : IDisposable
                 await pipe.ConnectAsync(ct.Token);
                 await pipe.WriteAsync(new byte[] { 0x7f, 0xff, 0xff, 0xff }, ct.Token);
             }
-            Assert.Contains("running", await Control.SendAsync(new("status"), ct.Token, name));
+            Assert.Contains("running", await Control.SendAsync(new("status"), name, ct.Token));
             Assert.Contains("InvalidDataException", log.ToString());
-            await Control.SendAsync(new("shutdown"), ct.Token, name);
+            await Control.SendAsync(new("shutdown"), name, ct.Token);
         }
         finally { await ct.CancelAsync(); await server; }
     }

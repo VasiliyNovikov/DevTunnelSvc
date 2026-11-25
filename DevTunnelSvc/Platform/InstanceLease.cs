@@ -12,9 +12,8 @@ internal static class InstanceLease
         }
     }
 
-    public static FileStream Acquire(string? directory = null)
+    public static FileStream Acquire(string directory)
     {
-        directory ??= DefaultDirectory;
         if (OperatingSystem.IsWindows()) Directory.CreateDirectory(directory);
         else Directory.CreateDirectory(directory, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
         try { return File.Open(Path.Combine(directory, "service.lock"), FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None); }

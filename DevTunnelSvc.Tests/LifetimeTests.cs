@@ -44,10 +44,10 @@ public sealed class LifetimeTests
         var run = ServiceLifetime.RunAsync(log, name, directory.FullName, limit.Token, _ => owner);
         try
         {
-            Assert.Contains("signed out", await Control.SendAsync(new("status"), limit.Token, name));
+            Assert.Contains("signed out", await Control.SendAsync(new("status"), name, limit.Token));
             await Assert.ThrowsExactlyAsync<IOException>(() => ServiceLifetime.RunAsync(log, name, directory.FullName, limit.Token));
             Assert.IsTrue(owner.CanWrite);
-            Assert.Contains("stopping", await Control.SendAsync(new("shutdown"), limit.Token, name));
+            Assert.Contains("stopping", await Control.SendAsync(new("shutdown"), name, limit.Token));
             await run;
             Assert.IsFalse(owner.CanWrite);
             using var lease = InstanceLease.Acquire(directory.FullName);
@@ -83,7 +83,7 @@ public sealed class LifetimeTests
             {
                 await commands();
                 if (cancel) await stop.CancelAsync();
-                else await Control.SendAsync(new("shutdown"), ct, name);
+                else await Control.SendAsync(new("shutdown"), name, ct);
                 await service;
             }
             finally { await stop.CancelAsync(); await service; }
@@ -92,17 +92,17 @@ public sealed class LifetimeTests
         {
             await RunOnce(async () =>
             {
-                Assert.Contains("signed out", await Control.SendAsync(new("status"), ct, name));
-                Assert.Contains("saved", await Control.SendAsync(new("login", SignIn: new("test-only-account")), ct, name));
+                Assert.Contains("signed out", await Control.SendAsync(new("status"), name, ct));
+                Assert.Contains("saved", await Control.SendAsync(new("login", SignIn: new("test-only-account")), name, ct));
             }, cancelFirstService);
             await RunOnce(async () =>
             {
-                var status = await Control.SendAsync(new("status"), ct, name);
+                var status = await Control.SendAsync(new("status"), name, ct);
                 Assert.Contains("signed in", status);
                 Assert.DoesNotContain("test-only-account", status);
-                Assert.Contains("removed", await Control.SendAsync(new("logout"), ct, name));
+                Assert.Contains("removed", await Control.SendAsync(new("logout"), name, ct));
             });
-            await RunOnce(async () => Assert.Contains("signed out", await Control.SendAsync(new("status"), ct, name)));
+            await RunOnce(async () => Assert.Contains("signed out", await Control.SendAsync(new("status"), name, ct)));
         }
         finally { directory.Delete(true); }
     }
@@ -189,13 +189,13 @@ public sealed class LifetimeTests
         var name = $"devtunnel-{Guid.NewGuid():N}";
         using (var server = new NamedPipeServerStream(name, PipeDirection.InOut, 1, PipeTransmissionMode.Byte, Control.Options))
         {
-            var send = Control.SendAsync(new("status"), ct.Token, name);
+            var send = Control.SendAsync(new("status"), name, ct.Token);
             await server.WaitForConnectionAsync(ct.Token);
             _ = await Control.ReadAsync(server, ControlJson.Default.Request, ct.Token);
             await Control.WriteAsync(server, new Reply(true, "wrong protocol", Version: 1), ControlJson.Default.Reply, ct.Token);
             Assert.Contains("Incompatible", (await Assert.ThrowsExactlyAsync<InvalidDataException>(() => send)).Message);
         }
-        var failure = await Assert.ThrowsExactlyAsync<IOException>(() => Control.SendAsync(new("status"), ct.Token, name));
+        var failure = await Assert.ThrowsExactlyAsync<IOException>(() => Control.SendAsync(new("status"), name, ct.Token));
         Assert.Contains("service start", failure.Message);
         await Assert.ThrowsExactlyAsync<InvalidDataException>(() => Control.WriteAsync(Stream.Null,
             new Request("login", SignIn: new(new string('x', 40000))), ControlJson.Default.Request, ct.Token));
