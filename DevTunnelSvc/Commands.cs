@@ -26,8 +26,9 @@ internal sealed class Commands(TextWriter output, TextWriter error, Func<Request
     public async Task<int> InvokeAsync(string[] args)
     {
         var root = new RootCommand("Control the per-user Dev Tunnels service.");
-        foreach (var name in new[] { "create", "status", "logout" })
+        foreach (var name in new[] { "list", "regions", "status", "logout" })
             root.Subcommands.Add(Action(name, (_, ct) => send(new(name), ct)));
+        root.Subcommands.Add(Create());
         root.Subcommands.Add(Login());
         root.Subcommands.Add(WithName("stop", "mapping"));
         root.Subcommands.Add(WithName("delete", "tunnel"));
@@ -68,6 +69,14 @@ internal sealed class Commands(TextWriter output, TextWriter error, Func<Request
         var command = Action("update", (r, ct) => localActions.Update(error, new(r.GetValue(check), r.GetValue(force)), ct));
         command.Options.Add(check);
         command.Options.Add(force);
+        return command;
+    }
+
+    private Command Create()
+    {
+        var region = new Option<string>("--region") { Description = "Create the tunnel in this region instead of the recommended one. Run 'regions' to compare them." };
+        var command = Action("create", (r, ct) => send(r.GetValue(region) is { } id ? new("create-in-region", Region: id) : new("create"), ct));
+        command.Options.Add(region);
         return command;
     }
 

@@ -66,9 +66,12 @@ devtunnelsvc create
 devtunnelsvc host TUNNEL --tunnel-port 8080 --target-port 3000
 ```
 
-On the **client**, use the same tunnel ID:
+The `cluster` part of the ID is the tunnel's region. `create` uses the region Dev Tunnels recommends for your network, which isn't always the nearest one. `devtunnelsvc regions` compares every region, fastest first. `LATENCY` is one HTTPS round trip from this machine over an already open connection, and `-` means the region couldn't be reached. `AVAILABILITY`, `LOAD`, and `REASON` come from the service and only cover the regions it considered for your account. To choose a region, pass its `REGION` value, for example `devtunnelsvc create --region euw`. A tunnel can't change regions, so pick one close to both machines.
+
+On the **client**, use the same tunnel ID. Because both machines use the same account, `devtunnelsvc list` shows it as well, along with each tunnel's current host and client connection counts, expiration time (UTC), and registered tunnel ports. A `-` marks a value the Dev Tunnels service didn't report.
 
 ```shell
+devtunnelsvc list
 devtunnelsvc connect TUNNEL --tunnel-port 8080 --listen-port 5000
 devtunnelsvc status
 ```
@@ -88,7 +91,7 @@ If upgrading from a memory-only build, stop the old service before replacing the
 
 ## Stop, update, and remove
 
-`status` lists mapping names and SDK connection states. `stop NAME` removes one mapping. `delete TUNNEL` deletes the cloud tunnel explicitly; stopping a mapping does not. V1 supports one hosted mapping per tunnel at a time. Mappings are still in memory: after a restart reissue `host` or `connect`, not `login`.
+`status` lists this service's mapping names and SDK connection states; `list` queries your account's tunnels instead. `stop NAME` removes one mapping. `delete TUNNEL` deletes the cloud tunnel explicitly; stopping a mapping does not. V1 supports one hosted mapping per tunnel at a time. Mappings are still in memory: after a restart reissue `host` or `connect`, not `login`.
 
 <img src="DevTunnelSvc/Assets/devtunnelsvc.png" width="32" height="32" alt="Teal tunnel and outbound arrow"> On Windows, right-click the notification-area icon for **Update**, **About**, or **Exit**. The menu and About dialog follow the Windows app theme and respect high contrast; older Windows versions use the native menu colors. **About** shows the running version. **Exit** stops the service and its mappings without signing you out or removing its startup registration.
 

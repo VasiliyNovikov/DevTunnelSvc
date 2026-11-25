@@ -13,7 +13,10 @@ internal static class Program
           service install|start|run|stop   Manage the per-user background service
           login [--no-browser] [--no-clipboard]  Sign in with GitHub
           logout                          Stop mappings and remove the saved GitHub sign-in
-          create | delete <tunnel>        Create a private tunnel or delete an owned tunnel
+          create [--region <region>]      Create a private tunnel in the recommended or chosen region
+          delete <tunnel>                 Delete an owned tunnel
+          list                            Show your tunnels' host and client counts, expiration, and ports
+          regions                         Compare regions by latency from this machine and recommendation
           host <tunnel> --tunnel-port N --target-port N
           connect <tunnel> --tunnel-port N --listen-port N
           status | stop <mapping>         Inspect or stop a forwarding session

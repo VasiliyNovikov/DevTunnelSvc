@@ -120,29 +120,171 @@ public sealed class HttpTests
     }
 
     [TestMethod]
-    public async Task ManagementSdkCreatesAnOwnerOnlyTunnelAndReturnsItsCluster()
+    [DataRow(null, "use2", "/clusters/recommendations")]
+    [DataRow("EUW", "euw", "/clusters")]
+    public async Task ManagementSdkCreatesAnOwnerOnlyTunnelAndReturnsItsCluster(string? region, string cluster, string lookup)
     {
-        var created = false;
+        List<string> lookups = [];
+        string? createdOn = null;
         using var handler = new HttpStub(async (request, ct) =>
         {
+            if (request.Method == HttpMethod.Get)
+            {
+                var path = request.RequestUri!.AbsolutePath;
+                lookups.Add(path);
+                // The region list is anonymous; recommendations identify the account's service tier.
+                Assert.AreEqual(path == "/clusters" ? null : "user-token", request.Headers.Authorization?.Parameter);
+                return HttpStub.Json(path == "/clusters"
+                    ? """[{"clusterId":"euw","uri":"https://euw.example.invalid","azureLocation":"WestEurope"}]"""
+                    : """{"recommendedClusterId":"use2"}""");
+            }
             Assert.AreEqual("github", request.Headers.Authorization?.Scheme);
             Assert.AreEqual("user-token", request.Headers.Authorization?.Parameter);
-            if (request.Method == HttpMethod.Get)
-                return HttpStub.Json("""{"recommendedClusterId":"use2"}""");
             if (request.Method == HttpMethod.Delete)
                 return new HttpResponseMessage(HttpStatusCode.NoContent);
             Assert.AreEqual(HttpMethod.Put, request.Method);
             using var body = JsonDocument.Parse(await request.Content!.ReadAsStringAsync(ct));
             Assert.IsFalse(body.RootElement.TryGetProperty("accessControl", out var acl) && acl.ValueKind != JsonValueKind.Null);
             Assert.Contains("*", request.Headers.GetValues("If-None-Match"));
-            created = true;
-            return HttpStub.Json("""{"tunnelId":"blue-tunnel","clusterId":"use2"}""");
+            createdOn = request.RequestUri!.Host;
+            return HttpStub.Json($$"""{"tunnelId":"blue-tunnel","clusterId":"{{cluster}}"}""");
         })
         { AllowAutoRedirect = false };
         await using var sdk = new TunnelBackend(() => Task.FromResult("user-token"), handler);
-        Assert.AreEqual("blue-tunnel.use2", await sdk.CreateAsync(CancellationToken.None));
-        Assert.IsTrue(created);
-        Assert.IsTrue(await sdk.DeleteAsync(TunnelKey.Parse("blue-tunnel.use2"), CancellationToken.None));
+        Assert.AreEqual($"blue-tunnel.{cluster}", await sdk.CreateAsync(region, CancellationToken.None));
+        Assert.AreEqual($"{cluster}.rel.tunnels.api.visualstudio.com", createdOn);
+        CollectionAssert.AreEqual(new[] { lookup }, lookups);
+        Assert.IsTrue(await sdk.DeleteAsync(TunnelKey.Parse($"blue-tunnel.{cluster}"), CancellationToken.None));
+    }
+
+    [TestMethod]
+    public async Task UnknownRegionIsRejectedBeforeCreatingATunnel()
+    {
+        using var handler = new HttpStub((request, _) =>
+        {
+            Assert.AreEqual("/clusters", request.RequestUri!.AbsolutePath, "Only the region list may be requested.");
+            return Task.FromResult(HttpStub.Json("""[{"clusterId":"euw","uri":"https://euw.example.invalid","azureLocation":"WestEurope"}]"""));
+        })
+        { AllowAutoRedirect = false };
+        await using var sdk = new TunnelBackend(() => throw new AssertFailedException("Rejecting a region needs no token."), handler);
+        var error = await Assert.ThrowsExactlyAsync<ArgumentException>(() => sdk.CreateAsync("westeurope", CancellationToken.None));
+        Assert.AreEqual("Unknown region 'westeurope'. Run 'regions' to see the available regions.", error.Message);
+    }
+
+    [TestMethod]
+    public async Task RegionsCombineTheServiceRecommendationWithMeasuredLatency()
+    {
+        using var handler = new HttpStub((request, _) =>
+        {
+            Assert.AreEqual(HttpMethod.Get, request.Method);
+            var recommendations = request.RequestUri!.AbsolutePath == "/clusters/recommendations";
+            Assert.AreEqual(recommendations ? "user-token" : null, request.Headers.Authorization?.Parameter);
+            return Task.FromResult(HttpStub.Json(recommendations ? """
+                {"preferredClusterId":"usw2","recommendedClusterId":"usw2","isFallback":false,"recommendations":[
+                  {"clusterId":"usw2","azureLocation":"WestUs2","azureGeo":"us","availability":"Available","utilizationPercent":27.59,"reason":"Preferred cluster with available capacity"},
+                  {"clusterId":"asse","azureLocation":"SouthEastAsia","azureGeo":"as","availability":"Degraded","utilizationPercent":91.2,"reason":"Available fallback cluster"}]}
+                """ : """
+                [{"clusterId":"asse","uri":"https://asse.example.invalid","azureLocation":"SouthEastAsia"},
+                 {"clusterId":"euw","uri":"https://euw.example.invalid","azureLocation":"WestEurope"},
+                 {"clusterId":"usw2","uri":"https://usw2.example.invalid","azureLocation":"WestUs2"}]
+                """));
+        })
+        { AllowAutoRedirect = false };
+        Dictionary<string, TimeSpan?> latency = new()
+        {
+            ["https://asse.example.invalid"] = null,
+            ["https://euw.example.invalid"] = TimeSpan.FromMilliseconds(39),
+            ["https://usw2.example.invalid"] = TimeSpan.FromMilliseconds(203),
+        };
+        await using var sdk = new TunnelBackend(() => Task.FromResult("user-token"), handler,
+            measureLatency: (endpoint, _) => Task.FromResult(latency[endpoint!]));
+        Assert.AreEqual(string.Join(Environment.NewLine,
+            "REGION  LOCATION       LATENCY  AVAILABILITY  LOAD  REASON",
+            "euw     WestEurope     39 ms    -             -     -",
+            "usw2    WestUs2        203 ms   Available     28%   Preferred cluster with available capacity",
+            "asse    SouthEastAsia  -        Degraded      91%   Available fallback cluster",
+            "Without --region, 'create' uses the recommended region usw2."),
+            TunnelRegion.FormatTable(await sdk.ListRegionsAsync(CancellationToken.None)));
+    }
+
+    [TestMethod]
+    public async Task RegionsWithoutAUsableEndpointAreListedWithUnknownLatency()
+    {
+        using var handler = new HttpStub((request, _) => Task.FromResult(HttpStub.Json(request.RequestUri!.AbsolutePath == "/clusters"
+            ? """[{"clusterId":"euw","uri":"","azureLocation":"WestEurope"}]""" : """{"recommendations":[]}""")))
+        { AllowAutoRedirect = false };
+        // Without an injected measurement the real probe runs, and an unusable endpoint must not fail the listing.
+        await using var sdk = new TunnelBackend(() => Task.FromResult("user-token"), handler);
+        Assert.AreEqual(string.Join(Environment.NewLine,
+            "REGION  LOCATION    LATENCY  AVAILABILITY  LOAD  REASON",
+            "euw     WestEurope  -        -             -     -"), TunnelRegion.FormatTable(await sdk.ListRegionsAsync(CancellationToken.None)));
+    }
+
+    [TestMethod]
+    public async Task LatencyProbeTimesOnlyTheWarmRequestAndReportsUnreachableEndpointsAsUnknown()
+    {
+        var clock = new SteppingClock();
+        Func<CancellationToken, Task<HttpResponseMessage>> respond = _ =>
+        {
+            // The first request also pays for DNS, TCP, and TLS setup.
+            clock.Elapsed += TimeSpan.FromMilliseconds(clock.Elapsed == TimeSpan.Zero ? 900 : 39);
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.NotFound));
+        };
+        List<Uri> requested = [];
+        using var http = new HttpClient(new HttpStub((request, ct) =>
+        {
+            Assert.AreEqual("DevTunnelSvc", request.Headers.UserAgent.Single().Product?.Name);
+            requested.Add(request.RequestUri!);
+            return respond(ct);
+        }));
+        var probe = new LatencyProbe(http, clock, TimeSpan.FromMilliseconds(50));
+        const string endpoint = "https://euw.example.invalid";
+        Assert.AreEqual(TimeSpan.FromMilliseconds(39), await probe.MeasureAsync(endpoint, CancellationToken.None));
+        CollectionAssert.AreEqual(new[] { new Uri(endpoint), new Uri(endpoint) }, requested);
+        Assert.IsNull(await probe.MeasureAsync("not an absolute URI", CancellationToken.None));
+        respond = _ => throw new HttpRequestException("unreachable");
+        Assert.IsNull(await probe.MeasureAsync(endpoint, CancellationToken.None));
+        respond = async ct => { await Task.Delay(Timeout.Infinite, ct); return new HttpResponseMessage(); };
+        Assert.IsNull(await probe.MeasureAsync(endpoint, CancellationToken.None));
+        await Assert.ThrowsAsync<OperationCanceledException>(() => probe.MeasureAsync(endpoint, new CancellationToken(canceled: true)));
+    }
+
+    private sealed class SteppingClock : TimeProvider
+    {
+        public TimeSpan Elapsed { get; set; }
+        public override long TimestampFrequency => TimeSpan.TicksPerSecond;
+        public override long GetTimestamp() => Elapsed.Ticks;
+    }
+
+    [TestMethod]
+    public async Task ManagementSdkListsTunnelsFromEveryRegionWithStatusAndPorts()
+    {
+        using var handler = new HttpStub((request, _) =>
+        {
+            Assert.AreEqual(HttpMethod.Get, request.Method);
+            Assert.AreEqual("/tunnels", request.RequestUri!.AbsolutePath);
+            var query = System.Web.HttpUtility.ParseQueryString(request.RequestUri.Query);
+            Assert.AreEqual("true", query["global"]);
+            Assert.AreEqual("true", query["includePorts"], true);
+            Assert.AreEqual("user-token", request.Headers.Authorization?.Parameter);
+            // The legacy-format ID "bcdfghjk" is valid in the service but rejected by TunnelKey.Parse.
+            return Task.FromResult(HttpStub.Json("""
+                {"value":[
+                  {"clusterId":"use2","value":[{"tunnelId":"blue-tunnel","clusterId":"use2","expiration":"2026-12-25T13:02:00Z",
+                    "status":{"hostConnectionCount":{"current":1,"limit":1},"clientConnectionCount":2},
+                    "ports":[{"portNumber":8080,"protocol":"tcp"},{"portNumber":3000,"protocol":"auto"}]},
+                    {"tunnelId":"red-tunnel","clusterId":"use2","expiration":"2026-12-01T10:00:00+02:00","status":{},"ports":[]}]},
+                  {"clusterId":"euw","value":[{"tunnelId":"bcdfghjk","clusterId":"euw"}]}]}
+                """));
+        })
+        { AllowAutoRedirect = false };
+        await using var sdk = new TunnelBackend(() => Task.FromResult("user-token"), handler);
+        var table = TunnelSummary.FormatTable(await sdk.ListAsync(CancellationToken.None));
+        Assert.AreEqual(string.Join(Environment.NewLine,
+            "TUNNEL            HOSTS  CLIENTS  EXPIRES            PORTS",
+            "bcdfghjk.euw      -      -        -                  -",
+            "blue-tunnel.use2  1      2        2026-12-25T13:02Z  3000,8080",
+            "red-tunnel.use2   -      -        2026-12-01T08:00Z  -"), table);
     }
 
     [TestMethod]

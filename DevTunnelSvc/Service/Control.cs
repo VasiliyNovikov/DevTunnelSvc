@@ -10,7 +10,7 @@ using DevTunnelSvc.Auth;
 namespace DevTunnelSvc.Service;
 
 internal sealed record Request(string Command, string? Tunnel = null, int TunnelPort = 0, int LocalPort = 0,
-    GitHubCredential? SignIn = null, int Version = Control.ProtocolVersion, int? ServicePid = null);
+    GitHubCredential? SignIn = null, int Version = Control.ProtocolVersion, int? ServicePid = null, string? Region = null);
 internal sealed record Reply(bool Success, string Message, int Version = Control.ProtocolVersion);
 
 [JsonSerializable(typeof(Request))]

@@ -19,7 +19,11 @@ internal sealed class TunnelService(ITunnelBackend backend, SessionCredential cr
             "status" => Task.FromResult(Status()),
             "service-pid" => Task.FromResult(Environment.ProcessId.ToString(CultureInfo.InvariantCulture)),
             "logout" => EndSessionAsync(logout: true),
-            "create" => Authenticated().CreateAsync(ct),
+            "create" => Authenticated().CreateAsync(region: null, ct),
+            // Older services reject this command instead of ignoring the region and creating the tunnel elsewhere.
+            "create-in-region" => Authenticated().CreateAsync(request.Region ?? throw new ArgumentException("Missing region."), ct),
+            "list" => ListAsync(ct),
+            "regions" => RegionsAsync(ct),
             "delete" => DeleteAsync(TunnelKey.Parse(request.Tunnel), ct),
             "host" or "connect" => OpenAsync(Mapping.Create(request.Command == "host", request.Tunnel, request.TunnelPort, request.LocalPort), ct),
             "stop" => StopAsync(request.Tunnel),
@@ -47,6 +51,10 @@ internal sealed class TunnelService(ITunnelBackend backend, SessionCredential cr
     private string Status() => string.Join(Environment.NewLine,
         sessions.Values.Select(s => $"{s.Map.Name}  {s.Relay.State}  {s.Map.Route}")
             .Prepend(credential.IsSignedIn ? "Service running; signed in." : "Service running; signed out."));
+
+    private async Task<string> ListAsync(CancellationToken ct) => TunnelSummary.FormatTable(await Authenticated().ListAsync(ct));
+
+    private async Task<string> RegionsAsync(CancellationToken ct) => TunnelRegion.FormatTable(await Authenticated().ListRegionsAsync(ct));
 
     private async Task<string> OpenAsync(Mapping map, CancellationToken ct)
     {

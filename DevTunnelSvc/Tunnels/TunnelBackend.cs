@@ -13,7 +13,9 @@ internal interface ILiveTunnel : IAsyncDisposable
 
 internal interface ITunnelBackend
 {
-    Task<string> CreateAsync(CancellationToken cancellation);
+    Task<string> CreateAsync(string? region, CancellationToken cancellation);
+    Task<IReadOnlyList<TunnelSummary>> ListAsync(CancellationToken cancellation);
+    Task<IReadOnlyList<TunnelRegion>> ListRegionsAsync(CancellationToken cancellation);
     Task<bool> DeleteAsync(TunnelKey key, CancellationToken cancellation);
     Task<ILiveTunnel> OpenAsync(Mapping map, CancellationToken cancellation);
 }
@@ -21,22 +23,42 @@ internal interface ITunnelBackend
 internal sealed class TunnelBackend : ITunnelBackend, IAsyncDisposable
 {
     private readonly TunnelManagementClient management;
+    private readonly RegionCatalog regions;
     private readonly TraceSource trace = new("DevTunnelSvc.Relay", SourceLevels.Off);
     private readonly ITunnelRelayStreamFactory? transport;
 
-    public TunnelBackend(Func<Task<string>> userToken, HttpMessageHandler? handler = null, ITunnelRelayStreamFactory? transport = null)
+    public TunnelBackend(Func<Task<string>> userToken, HttpMessageHandler? handler = null, ITunnelRelayStreamFactory? transport = null,
+        Func<string?, CancellationToken, Task<TimeSpan?>>? measureLatency = null)
     {
         this.transport = transport;
         management = new(new ProductInfoHeaderValue("DevTunnelSvc", Program.Version),
             async () => new AuthenticationHeaderValue(TunnelAuthenticationSchemes.GitHub, await userToken()),
             tunnelServiceUri: null, httpHandler: handler);
+        regions = new(management, measureLatency);
     }
 
-    public async Task<string> CreateAsync(CancellationToken cancellation)
+    public async Task<string> CreateAsync(string? region, CancellationToken cancellation)
     {
-        var created = await management.CreateTunnelAsync(new Tunnel(), options: null, cancellation);
+        // Without a cluster, the SDK asks the service to recommend one.
+        var tunnel = new Tunnel { ClusterId = region is null ? null : await regions.FindAsync(region, cancellation) };
+        var created = await management.CreateTunnelAsync(tunnel, options: null, cancellation);
         return TunnelKey.Parse($"{created.TunnelId}.{created.ClusterId}").ToString();
     }
+
+    public Task<IReadOnlyList<TunnelRegion>> ListRegionsAsync(CancellationToken cancellation) => regions.ListAsync(cancellation);
+
+    public async Task<IReadOnlyList<TunnelSummary>> ListAsync(CancellationToken cancellation)
+    {
+        // A null cluster lists every region; listed tunnels omit their ports unless requested.
+        var tunnels = await management.ListTunnelsAsync(clusterId: null, domain: null,
+            new TunnelRequestOptions { IncludePorts = true }, ownedTunnelsOnly: null, cancellation);
+        return [.. tunnels.Select(Summarize)];
+    }
+
+    // Keep the service's ID verbatim: older generated IDs are valid tunnels that TunnelKey rejects as new IDs.
+    private static TunnelSummary Summarize(Tunnel tunnel) => new($"{tunnel.TunnelId}.{tunnel.ClusterId}",
+        tunnel.Status?.HostConnectionCount?.Current, tunnel.Status?.ClientConnectionCount?.Current,
+        tunnel.Expiration, [.. (tunnel.Ports ?? []).Select(port => (int)port.PortNumber)]);
 
     public Task<bool> DeleteAsync(TunnelKey key, CancellationToken cancellation) =>
         management.DeleteTunnelAsync(Identify(key), options: null, cancellation);

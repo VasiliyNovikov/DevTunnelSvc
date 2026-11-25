@@ -145,4 +145,19 @@ public sealed class CliTests
         Assert.AreEqual(new Request("delete", "blue-tunnel.use2"), received);
         Assert.Contains("deleted", output.ToString());
     }
+
+    [TestMethod]
+    public async Task CreateKeepsTheOriginalCommandUnlessARegionIsRequested()
+    {
+        List<Request> requests = [];
+        Task<string> Record(Request request, CancellationToken _) { requests.Add(request); return Task.FromResult("created"); }
+        Assert.AreEqual(0, await Program.RunAsync(["create"], TextWriter.Null, TextWriter.Null, Record));
+        Assert.AreEqual(0, await Program.RunAsync(["create", "--region", "euw"], TextWriter.Null, TextWriter.Null, Record));
+        // An older service rejects the region-aware command instead of creating the tunnel in its default region.
+        CollectionAssert.AreEqual(new Request[] { new("create"), new("create-in-region", Region: "euw") }, requests);
+        using var help = new StringWriter();
+        Assert.AreEqual(0, await Program.RunAsync(["create", "--help"], help, TextWriter.Null, Record));
+        Assert.Contains("instead of the recommended one", help.ToString());
+        Assert.HasCount(2, requests);
+    }
 }

@@ -104,6 +104,65 @@ public sealed class ServiceTests : IDisposable
     }
 
     [TestMethod]
+    public async Task ListShowsTheAccountsTunnelsOnlyAfterSignIn()
+    {
+        var backend = new TestBackend();
+        await using var service = new TunnelService(backend, credential);
+        using var output = new StringWriter();
+        using var error = new StringWriter();
+        Assert.AreEqual(1, await Program.RunAsync(["list"], output, error, service.ExecuteAsync));
+        Assert.Contains("Run 'login' first", error.ToString());
+        Assert.IsEmpty(output.ToString());
+        await service.ExecuteAsync(new("login", SignIn: new("token")), CancellationToken.None);
+        Assert.AreEqual(0, await Program.RunAsync(["list"], output, error, service.ExecuteAsync));
+        Assert.AreEqual("No tunnels found. Run 'create' to create one." + Environment.NewLine, output.ToString());
+        output.GetStringBuilder().Clear();
+        backend.Tunnels.Add(new("blue-tunnel.use2", 1, null, null, [8080]));
+        Assert.AreEqual(0, await Program.RunAsync(["list"], output, error, service.ExecuteAsync));
+        Assert.AreEqual(string.Join(Environment.NewLine, "TUNNEL            HOSTS  CLIENTS  EXPIRES  PORTS",
+            "blue-tunnel.use2  1      -        -        8080", ""), output.ToString());
+    }
+
+    [TestMethod]
+    public async Task RegionsAndRegionalCreatesRequireSignInAndReachTheBackend()
+    {
+        var backend = new TestBackend
+        {
+            Regions =
+            {
+                new("usw2", "WestUs2", TimeSpan.FromMilliseconds(203), null, null, null, false),
+                new("brs", "BrazilSouth", null, null, null, null, false),
+                new("euw", "WestEurope", TimeSpan.FromMilliseconds(39), null, null, null, false),
+                new("eun1", "NorthEurope", TimeSpan.FromMilliseconds(39), null, null, null, false),
+            }
+        };
+        await using var service = new TunnelService(backend, credential);
+        using var output = new StringWriter();
+        using var error = new StringWriter();
+        string[][] remoteCommands = [["regions"], ["create", "--region", "euw"]];
+        foreach (var command in remoteCommands)
+        {
+            error.GetStringBuilder().Clear();
+            Assert.AreEqual(1, await Program.RunAsync(command, output, error, service.ExecuteAsync));
+            Assert.Contains("Run 'login' first", error.ToString());
+        }
+        await service.ExecuteAsync(new("login", SignIn: new("token")), CancellationToken.None);
+        foreach (var command in remoteCommands.Append(["create"]))
+            Assert.AreEqual(0, await Program.RunAsync(command, output, error, service.ExecuteAsync));
+        // Fastest first, ties by name, unmeasured last; no footer without a recommended region.
+        Assert.AreEqual(string.Join(Environment.NewLine,
+            "REGION  LOCATION     LATENCY  AVAILABILITY  LOAD  REASON",
+            "eun1    NorthEurope  39 ms    -             -     -",
+            "euw     WestEurope   39 ms    -             -     -",
+            "usw2    WestUs2      203 ms   -             -     -",
+            "brs     BrazilSouth  -        -             -     -",
+            "blue-tunnel.euw", "blue-tunnel.use2", ""), output.ToString());
+        CollectionAssert.AreEqual(new string?[] { "euw", null }, backend.CreatedRegions);
+        Assert.Contains("region", (await Assert.ThrowsExactlyAsync<ArgumentException>(
+            () => service.ExecuteAsync(new("create-in-region"), CancellationToken.None))).Message);
+    }
+
+    [TestMethod]
     public async Task ValidPortBoundariesArePreservedWithoutNarrowingOrWrapping()
     {
         await using var service = new TunnelService(new TestBackend(), credential);
@@ -248,8 +307,17 @@ public sealed class ServiceTests : IDisposable
     private sealed class TestBackend : ITunnelBackend
     {
         public List<TestSession> Sessions { get; } = [];
+        public List<TunnelSummary> Tunnels { get; } = [];
+        public List<TunnelRegion> Regions { get; } = [];
+        public List<string?> CreatedRegions { get; } = [];
         public bool Fail { get; init; }
-        public Task<string> CreateAsync(CancellationToken ct) => Task.FromResult("blue-tunnel.use2");
+        public Task<string> CreateAsync(string? region, CancellationToken ct)
+        {
+            CreatedRegions.Add(region);
+            return Task.FromResult($"blue-tunnel.{region ?? "use2"}");
+        }
+        public Task<IReadOnlyList<TunnelSummary>> ListAsync(CancellationToken ct) => Task.FromResult<IReadOnlyList<TunnelSummary>>(Tunnels);
+        public Task<IReadOnlyList<TunnelRegion>> ListRegionsAsync(CancellationToken ct) => Task.FromResult<IReadOnlyList<TunnelRegion>>(Regions);
         public Task<bool> DeleteAsync(TunnelKey key, CancellationToken ct) => Task.FromResult(key.Id != "missing-tunnel");
         public Task<ILiveTunnel> OpenAsync(Mapping map, CancellationToken ct)
         {
