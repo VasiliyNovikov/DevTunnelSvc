@@ -259,23 +259,42 @@ public sealed class HttpTests
     [TestMethod]
     public async Task ManagementSdkListsTunnelsFromEveryRegionWithStatusAndPorts()
     {
+        // Each tunnel is read from its own cluster; "gone-tunnel" was deleted after the listing.
+        // The legacy-format ID "bcdfghjk" is valid in the service but rejected by TunnelKey.Parse.
+        Dictionary<string, string> details = new()
+        {
+            ["use2/blue-tunnel"] = """
+                {"tunnelId":"blue-tunnel","clusterId":"use2","expiration":"2026-12-25T13:02:00Z",
+                 "status":{"hostConnectionCount":{"current":1,"limit":1},"clientConnectionCount":2},
+                 "ports":[{"portNumber":8080,"protocol":"tcp"},{"portNumber":3000,"protocol":"auto"}]}
+                """,
+            ["use2/red-tunnel"] = """{"tunnelId":"red-tunnel","clusterId":"use2","expiration":"2026-12-01T10:00:00+02:00","status":{},"ports":[]}""",
+            ["euw/bcdfghjk"] = """{"tunnelId":"bcdfghjk","clusterId":"euw"}""",
+        };
         using var handler = new HttpStub((request, _) =>
         {
             Assert.AreEqual(HttpMethod.Get, request.Method);
-            Assert.AreEqual("/tunnels", request.RequestUri!.AbsolutePath);
-            var query = System.Web.HttpUtility.ParseQueryString(request.RequestUri.Query);
-            Assert.AreEqual("true", query["global"]);
-            Assert.AreEqual("true", query["includePorts"], true);
             Assert.AreEqual("user-token", request.Headers.Authorization?.Parameter);
-            // The legacy-format ID "bcdfghjk" is valid in the service but rejected by TunnelKey.Parse.
-            return Task.FromResult(HttpStub.Json("""
-                {"value":[
-                  {"clusterId":"use2","value":[{"tunnelId":"blue-tunnel","clusterId":"use2","expiration":"2026-12-25T13:02:00Z",
-                    "status":{"hostConnectionCount":{"current":1,"limit":1},"clientConnectionCount":2},
-                    "ports":[{"portNumber":8080,"protocol":"tcp"},{"portNumber":3000,"protocol":"auto"}]},
-                    {"tunnelId":"red-tunnel","clusterId":"use2","expiration":"2026-12-01T10:00:00+02:00","status":{},"ports":[]}]},
-                  {"clusterId":"euw","value":[{"tunnelId":"bcdfghjk","clusterId":"euw"}]}]}
-                """));
+            var query = System.Web.HttpUtility.ParseQueryString(request.RequestUri!.Query);
+            if (request.RequestUri.AbsolutePath == "/tunnels")
+            {
+                Assert.AreEqual("true", query["global"]);
+                // Like the service, the cross-region listing returns empty port lists.
+                return Task.FromResult(HttpStub.Json("""
+                    {"value":[
+                      {"clusterId":"use2","value":[{"tunnelId":"blue-tunnel","clusterId":"use2","ports":[]},{"tunnelId":"red-tunnel","clusterId":"use2","ports":[]}]},
+                      {"clusterId":"euw","value":[{"tunnelId":"bcdfghjk","clusterId":"euw","ports":[]},{"tunnelId":"gone-tunnel","clusterId":"euw","ports":[]}]}]}
+                    """));
+            }
+            Assert.AreEqual("true", query["includePorts"], true);
+            var key = request.RequestUri.Host.Split('.')[0] + request.RequestUri.AbsolutePath["/tunnels".Length..];
+            if (details.TryGetValue(key, out var json))
+                return Task.FromResult(HttpStub.Json(json));
+            // The service reports a missing tunnel as a ProblemDetails "Not Found".
+            var missing = new HttpResponseMessage(HttpStatusCode.NotFound)
+            { Content = new StringContent("""{"title":"Not Found","status":404}""", Encoding.UTF8, "application/problem+json") };
+            missing.Headers.Add("X-Served-By", "tunnels-prod-rel-euw-v3-cluster");
+            return Task.FromResult(missing);
         })
         { AllowAutoRedirect = false };
         await using var sdk = new TunnelBackend(() => Task.FromResult("user-token"), handler);

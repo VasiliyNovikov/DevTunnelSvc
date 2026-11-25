@@ -49,10 +49,12 @@ internal sealed class TunnelBackend : ITunnelBackend, IAsyncDisposable
 
     public async Task<IReadOnlyList<TunnelSummary>> ListAsync(CancellationToken cancellation)
     {
-        // A null cluster lists every region; listed tunnels omit their ports unless requested.
-        var tunnels = await management.ListTunnelsAsync(clusterId: null, domain: null,
-            new TunnelRequestOptions { IncludePorts = true }, ownedTunnelsOnly: null, cancellation);
-        return [.. tunnels.Select(Summarize)];
+        // The cross-region listing returns empty port lists even when ports are requested, so read each tunnel
+        // from its own cluster. A tunnel deleted in between reads as null and is skipped.
+        var listed = await management.ListTunnelsAsync(clusterId: null, domain: null, options: null, ownedTunnelsOnly: null, cancellation);
+        var tunnels = await Task.WhenAll(listed.Select(tunnel =>
+            management.GetTunnelAsync(tunnel, new TunnelRequestOptions { IncludePorts = true }, cancellation)));
+        return [.. tunnels.OfType<Tunnel>().Select(Summarize)];
     }
 
     // Keep the service's ID verbatim: older generated IDs are valid tunnels that TunnelKey rejects as new IDs.
