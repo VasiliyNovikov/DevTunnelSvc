@@ -100,7 +100,7 @@ devtunnelsvc update --check
 devtunnelsvc update --force
 ```
 
-On both platforms, `update --check` only reports availability. `update --force` and the Windows tray's **Update** action check for a newer stable release first. If the service is running, they ask before stopping it, verify the release asset's SHA-256 digest, install it, and restart the service. **Start your port mappings again afterward**; the saved sign-in is preserved. If you're already up to date, nothing is stopped or reinstalled. A stopped service stays stopped after a CLI update.
+On both platforms, `update --check` only reports availability. `update --force` checks for a newer stable release first. Without asking, it stops a running service, verifies the release asset's SHA-256 digest, installs it, and starts the service, even if the service was stopped beforehand or the install failed. The Windows tray's **Update** action does the same for its running service but asks first. **Start your port mappings again afterward**; the saved sign-in is preserved. If you're already up to date, nothing is stopped, reinstalled, or started.
 
 Plain `update` never stops a running service. To control downtime yourself, run `devtunnelsvc service stop`, `devtunnelsvc update`, then `devtunnelsvc service start`. `service run` runs in the foreground for diagnostics. Linux requires a running systemd user manager for `install` and `start`. To keep the service running after the last login session ends, configure user lingering according to your system policy.
 

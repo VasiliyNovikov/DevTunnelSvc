@@ -18,7 +18,7 @@ internal sealed class TrayUpdate(Func<CancellationToken, Task<ReleaseInfo?>> fin
 
         ct.ThrowIfCancellationRequested();
         await stop(ct);
-        return await UpdateHandoff.InstallAndRestartAsync(release.TagName, t => install(release, t), restart, ct);
+        return await UpdateHandoff.InstallAndStartAsync(release.TagName, wasRunning: true, t => install(release, t), restart, ct);
     }
 
     [SupportedOSPlatform("windows")]
@@ -40,7 +40,7 @@ internal sealed class TrayUpdate(Func<CancellationToken, Task<ReleaseInfo?>> fin
                     await WaitForExitAsync(service.WaitForExitAsync);
                     await updater.ApplyAsync(release, executable, () => InstanceLease.Acquire(), t);
                 },
-                () => UpdateHandoff.RestartInstalledAsync(executable, ServiceLifetime.ExitCodeAsync));
+                () => UpdateHandoff.StartInstalledAsync(executable, ServiceLifetime.ExitCodeAsync));
             return await flow.RunAsync(Program.Version, ct);
         }, dialogs);
     }

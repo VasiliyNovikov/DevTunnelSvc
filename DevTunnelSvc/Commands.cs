@@ -12,7 +12,7 @@ internal readonly record struct UpdateOptions(bool CheckOnly, bool Force);
 
 internal sealed record LocalActions(
     Func<TextWriter, LoginOptions, CancellationToken, Task<GitHubCredential>> Login,
-    Func<TextWriter, UpdateOptions, CancellationToken, Task<string>> Update,
+    Func<UpdateOptions, CancellationToken, Task<string>> Update,
     Func<CancellationToken, Task<string>> Start,
     Func<CancellationToken, Task<string>> Install,
     Func<TextWriter, CancellationToken, Task> Run)
@@ -65,8 +65,8 @@ internal sealed class Commands(TextWriter output, TextWriter error, Func<Request
     private Command Update()
     {
         var check = new Option<bool>("--check") { Description = "Check for a newer release without installing it or stopping the service." };
-        var force = new Option<bool>("--force") { Description = "Ask before stopping a running service and its mappings to install a newer release, then restart it." };
-        var command = Action("update", (r, ct) => localActions.Update(error, new(r.GetValue(check), r.GetValue(force)), ct));
+        var force = new Option<bool>("--force") { Description = "Without asking, stop a running service and its mappings, install a newer release, and start the service, even if it was stopped." };
+        var command = Action("update", (r, ct) => localActions.Update(new(r.GetValue(check), r.GetValue(force)), ct));
         command.Options.Add(check);
         command.Options.Add(force);
         return command;

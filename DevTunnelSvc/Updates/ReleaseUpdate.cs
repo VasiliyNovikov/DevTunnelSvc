@@ -27,15 +27,12 @@ internal sealed class ReleaseUpdate(HttpClient http, UpdateHandoff? force = null
         if (checkOnly)
             return $"Available: {release.TagName} (installed: {current}).";
         if (force is not null)
-        {
-            var result = await force.ApplyIfRunningAsync(current, release.TagName, async token =>
+            return await force.ApplyAsync(release.TagName, async token =>
             {
                 using var lease = await UpdateHandoff.WaitForLeaseAsync(acquireUpdateLease, Task.Delay);
                 token.ThrowIfCancellationRequested();
                 await DownloadAndInstallAsync(release, executable, token);
             }, ct);
-            if (result is not null) return result;
-        }
         await ApplyAsync(release, executable, acquireUpdateLease, ct);
         return $"Installed {release.TagName}. Run 'service start' to restart the service.";
     }

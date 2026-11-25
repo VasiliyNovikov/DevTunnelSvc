@@ -143,7 +143,7 @@ public sealed class TrayMenuTests
     }
 
     [TestMethod]
-    public async Task RestartUsesTheInstalledCliAndPropagatesItsReadinessResult()
+    public async Task StartUsesTheInstalledCliAndPropagatesItsReadinessResult()
     {
         const string installed = @"C:\Apps with spaces\devtunnelsvc.exe";
         var result = 0;
@@ -155,9 +155,9 @@ public sealed class TrayMenuTests
             Assert.IsTrue(ct.CanBeCanceled);
             return Task.FromResult(result);
         }
-        await UpdateHandoff.RestartInstalledAsync(installed, Start);
+        await UpdateHandoff.StartInstalledAsync(installed, Start);
         result = 17;
-        var failure = await Assert.ThrowsExactlyAsync<InvalidOperationException>(() => UpdateHandoff.RestartInstalledAsync(installed, Start));
+        var failure = await Assert.ThrowsExactlyAsync<InvalidOperationException>(() => UpdateHandoff.StartInstalledAsync(installed, Start));
         Assert.Contains("service start", failure.Message);
         Assert.Contains("17", failure.Message);
     }

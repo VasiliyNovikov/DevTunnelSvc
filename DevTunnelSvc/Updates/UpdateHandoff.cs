@@ -4,30 +4,27 @@ using DevTunnelSvc.Service;
 
 namespace DevTunnelSvc.Updates;
 
-internal sealed record UpdateHandoff(Func<Request, CancellationToken, Task<string>> Send,
-    Func<string, CancellationToken, Task<bool>> Confirm, Func<Task> Restart)
+internal sealed record UpdateHandoff(Func<Request, CancellationToken, Task<string>> Send, Func<Task> Start)
 {
     internal static string Question(string current, string tag) =>
         $"Install {tag} (currently {current})?\n\nThis will stop all active port mappings, install the update, and restart DevTunnelSvc. Mappings must be started again.";
 
-    internal static async Task<bool> ConfirmAsync(TextReader input, TextWriter output, string question, CancellationToken ct)
+    // `update --force` runs unattended: it stops a running service without asking and always leaves DevTunnelSvc running.
+    internal async Task<string> ApplyAsync(string tag, Func<CancellationToken, Task> install, CancellationToken ct)
     {
-        await output.WriteAsync($"{question} [y/N] ".AsMemory(), ct);
-        await output.FlushAsync(ct);
-        var answer = (await input.ReadLineAsync(ct))?.Trim();
-        return string.Equals(answer, "y", StringComparison.OrdinalIgnoreCase) || string.Equals(answer, "yes", StringComparison.OrdinalIgnoreCase);
+        var wasRunning = await StopIfRunningAsync(ct);
+        return await InstallAndStartAsync(tag, wasRunning, install, Start, ct);
     }
 
-    internal async Task<string?> ApplyIfRunningAsync(string current, string tag, Func<CancellationToken, Task> install, CancellationToken ct)
+    private async Task<bool> StopIfRunningAsync(CancellationToken ct)
     {
         string target;
         try { target = await Send(new("service-pid"), ct); }
-        catch (IOException ex) when (ex.InnerException is TimeoutException) { return null; }
+        catch (IOException ex) when (ex.InnerException is TimeoutException) { return false; }
         if (!int.TryParse(target, NumberStyles.None, CultureInfo.InvariantCulture, out var pid) || pid <= 0)
             throw new InvalidDataException("The service returned an invalid process ID; update not started.");
-        if (!await Confirm(Question(current, tag), ct)) return "Update cancelled; the service was not stopped.";
         await StopAsync(pid, Send, ct);
-        return await InstallAndRestartAsync(tag, install, Restart, ct);
+        return true;
     }
 
     internal static Task StopAsync(int pid, Func<Request, CancellationToken, Task<string>> send, CancellationToken ct)
@@ -47,7 +44,8 @@ internal sealed record UpdateHandoff(Func<Request, CancellationToken, Task<strin
         }
     }
 
-    internal static async Task<string> InstallAndRestartAsync(string tag, Func<CancellationToken, Task> install, Func<Task> restart, CancellationToken ct)
+    internal static async Task<string> InstallAndStartAsync(string tag, bool wasRunning, Func<CancellationToken, Task> install,
+        Func<Task> start, CancellationToken ct)
     {
         Exception? installError = null;
         using var download = CancellationTokenSource.CreateLinkedTokenSource(ct);
@@ -55,19 +53,20 @@ internal sealed record UpdateHandoff(Func<Request, CancellationToken, Task<strin
         try { await install(download.Token); }
         catch (Exception ex) { installError = ex; }
 
-        // Once we have stopped the user's service, restore it even if the install failed or was cancelled.
-        try { await restart(); }
+        // Leave the service running even if the install failed or was cancelled.
+        try { await start(); }
         catch (Exception ex)
         {
             var result = installError is null ? $"Installed {tag}." : $"Update failed: {installError.Message}";
-            throw new InvalidOperationException($"{result}\nThe service could not restart: {ex.Message}\nRun 'devtunnelsvc service start'.", ex);
+            throw new InvalidOperationException($"{result}\nThe service could not start: {ex.Message}\nRun 'devtunnelsvc service start'.", ex);
         }
+        var (started, mappings) = wasRunning ? ("restarted", " Start your port mappings again.") : ("started", "");
         if (installError is not null)
-            throw new InvalidOperationException($"Update failed: {installError.Message}\nThe service was restarted. Start your port mappings again.", installError);
-        return $"Installed {tag} and restarted DevTunnelSvc. Start your port mappings again.";
+            throw new InvalidOperationException($"Update failed: {installError.Message}\nThe service was {started}.{mappings}", installError);
+        return $"Installed {tag} and {started} DevTunnelSvc.{mappings}";
     }
 
-    internal static async Task RestartInstalledAsync(string executable, Func<ProcessStartInfo, CancellationToken, Task<int>> run)
+    internal static async Task StartInstalledAsync(string executable, Func<ProcessStartInfo, CancellationToken, Task<int>> run)
     {
         // The installed CLI may speak a newer pipe protocol than the updater.
         using var limit = new CancellationTokenSource(TimeSpan.FromMinutes(2));

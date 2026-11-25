@@ -100,7 +100,7 @@ public sealed class CliTests
             Start = _ => Record("start"),
             Install = _ => Record("install"),
             Run = (_, _) => Record("run"),
-            Update = (_, options, _) => Record($"{(options.CheckOnly ? "check" : "apply")}{(options.Force ? "-force" : "")}")
+            Update = (options, _) => Record($"{(options.CheckOnly ? "check" : "apply")}{(options.Force ? "-force" : "")}")
         };
         string[][] commands = [["service", "install"], ["service", "start"], ["service", "run"], ["service", "stop"],
             ["update", "--check"], ["update"], ["update", "--force"], ["update", "--force", "--check"]];
@@ -113,13 +113,14 @@ public sealed class CliTests
     }
 
     [TestMethod]
-    public async Task UpdateHelpDistinguishesReadOnlyChecksFromConfirmedDowntime()
+    public async Task UpdateHelpDistinguishesReadOnlyChecksFromUnattendedRestarts()
     {
         using var output = new StringWriter();
         using var error = new StringWriter();
         Assert.AreEqual(0, await Program.RunAsync(["update", "--help"], output, error, (_, _) => throw new AssertFailedException()));
         Assert.Contains("without installing it or stopping the service", output.ToString());
-        Assert.Contains("Ask before stopping a running service and its mappings", output.ToString());
+        Assert.Contains("Without asking, stop a running service and its mappings", output.ToString());
+        Assert.Contains("even if it was stopped", output.ToString());
         Assert.IsEmpty(error.ToString());
     }
 

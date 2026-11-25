@@ -356,7 +356,8 @@ public sealed class HttpTests
     [DataRow(false, true, true)]
     [DataRow(false, true, false)]
     [DataRow(false, false, true)]
-    public async Task UpdatesInstallTheSelectedVerifiedReleaseAndRestoreOnlyAPreviouslyRunningService(bool tray, bool initiallyRunning, bool validDigest)
+    [DataRow(false, false, false)]
+    public async Task UpdatesInstallTheSelectedVerifiedReleaseAndLeaveTheServiceRunning(bool tray, bool initiallyRunning, bool validDigest)
     {
         var directory = Directory.CreateTempSubdirectory("devtunnel-tray-update-");
         var exe = Path.Combine(directory.FullName, "installed");
@@ -386,7 +387,7 @@ public sealed class HttpTests
         {
             await File.WriteAllTextAsync(exe, "original");
             bool Confirm(string question) { Assert.IsTrue(running); Assert.Contains("v2.0.0", question); confirms++; return true; }
-            async Task Restart()
+            async Task Start()
             {
                 using var lease = InstanceLease.Acquire(directory.FullName);
                 Assert.AreEqual(validDigest ? "replacement" : "original", await File.ReadAllTextAsync(exe));
@@ -397,7 +398,6 @@ public sealed class HttpTests
             {
                 if (!running) throw new IOException("not listening", new TimeoutException());
                 if (request.Command == "service-pid") return Task.FromResult("42");
-                Assert.AreEqual(1, confirms);
                 Assert.AreEqual(new Request("shutdown-for-update", ServicePid: 42), request);
                 running = false;
                 return Task.FromResult("stopping");
@@ -408,17 +408,24 @@ public sealed class HttpTests
                 if (++leases == 1 && initiallyRunning && !tray) throw new IOException("shutdown is finishing");
                 return InstanceLease.Acquire(directory.FullName);
             }
-            var updater = new ReleaseUpdate(http, new(Send, (question, _) => Task.FromResult(Confirm(question)), Restart));
+            var updater = new ReleaseUpdate(http, new(Send, Start));
             var menu = new TrayUpdate(t => updater.FindNewerAsync("1.0.0", t), Confirm,
-                _ => { running = false; return Task.CompletedTask; }, (release, t) => updater.ApplyAsync(release, exe, Lease, t), Restart);
+                _ => { running = false; return Task.CompletedTask; }, (release, t) => updater.ApplyAsync(release, exe, Lease, t), Start);
             async Task<string?> Update() => tray ? await menu.RunAsync("1.0.0", CancellationToken.None)
                 : await updater.RunAsync("1.0.0", exe, false, Lease, CancellationToken.None);
-            if (validDigest) Assert.Contains("Installed v2.0.0", (await Update())!);
-            else Assert.Contains("SHA-256", (await Assert.ThrowsExactlyAsync<InvalidOperationException>(Update)).Message);
+            if (validDigest)
+                Assert.AreEqual(initiallyRunning ? "Installed v2.0.0 and restarted DevTunnelSvc. Start your port mappings again."
+                    : "Installed v2.0.0 and started DevTunnelSvc.", await Update());
+            else
+            {
+                var failure = (await Assert.ThrowsExactlyAsync<InvalidOperationException>(Update)).Message;
+                Assert.Contains("SHA-256", failure);
+                Assert.EndsWith(initiallyRunning ? "The service was restarted. Start your port mappings again." : "The service was started.", failure);
+            }
             Assert.AreEqual(1, checks);
-            Assert.AreEqual(initiallyRunning ? 1 : 0, confirms);
-            Assert.AreEqual(confirms, starts);
-            Assert.AreEqual(initiallyRunning, running);
+            Assert.AreEqual(tray ? 1 : 0, confirms, "Only the tray asks; update --force runs unattended.");
+            Assert.AreEqual(1, starts);
+            Assert.IsTrue(running);
             Assert.AreEqual(validDigest ? "replacement" : "original", await File.ReadAllTextAsync(exe));
         }
         finally { directory.Delete(true); }
@@ -428,15 +435,10 @@ public sealed class HttpTests
     [DataRow("2.0.0", false, "up to date")]
     [DataRow("3.0.0", false, "up to date")]
     [DataRow("1.0.0", true, "Available: v2.0.0")]
-    [DataRow("1.0.0", false, "cancelled")]
-    public async Task ForceIsReadOnlyForACurrentReleaseCheckOrDeclinedStop(string installed, bool check, string expected)
+    public async Task ForceIsReadOnlyForACurrentReleaseOrCheck(string installed, bool check, string expected)
     {
-        var asked = expected == "cancelled";
-        using var prompt = new StringWriter();
-        using var eof = new StringReader("");
-        var requests = new List<Request>();
-        var handoff = new UpdateHandoff((r, _) => { requests.Add(r); return Task.FromResult("99"); },
-            (q, ct) => UpdateHandoff.ConfirmAsync(eof, prompt, q, ct), () => throw new AssertFailedException());
+        var handoff = new UpdateHandoff((_, _) => throw new AssertFailedException("The service must not be contacted."),
+            () => throw new AssertFailedException("The service must not be started."));
         using var http = new HttpClient(new HttpStub((r, _) =>
         {
             Assert.AreEqual("api.github.com", r.RequestUri!.Host, "No asset should be downloaded.");
@@ -444,24 +446,6 @@ public sealed class HttpTests
         }));
         var result = await new ReleaseUpdate(http, handoff).RunAsync(installed, "unused", check, () => throw new AssertFailedException(), CancellationToken.None);
         Assert.Contains(expected, result);
-        CollectionAssert.AreEqual(asked ? new Request[] { new("service-pid") } : [], requests);
-        if (asked) Assert.Contains("stop all active port mappings", prompt.ToString());
-        else Assert.IsEmpty(prompt.ToString());
-    }
-
-    [TestMethod]
-    [DataRow(" Y ", true)]
-    [DataRow("Yes", true)]
-    [DataRow("", false)]
-    [DataRow("no", false)]
-    [DataRow("yesterday", false)]
-    public async Task ForcePromptRequiresAnExplicitYes(string answer, bool expected)
-    {
-        using var input = new StringReader(answer + "\n");
-        using var buffer = new MemoryStream();
-        using var output = new StreamWriter(buffer);
-        Assert.AreEqual(expected, await UpdateHandoff.ConfirmAsync(input, output, "Stop now?", CancellationToken.None));
-        Assert.Contains("Stop now? [y/N]", Encoding.UTF8.GetString(buffer.ToArray()), "The prompt must be visible without waiting for a newline or disposing the writer.");
     }
 
     [TestMethod]
@@ -485,26 +469,25 @@ public sealed class HttpTests
     {
         using var cancel = new CancellationTokenSource();
         var target = "0";
-        var cancelAtPrompt = false;
+        var cancelAfterLookup = false;
         Task<string> Send(Request r, CancellationToken _)
         {
-            if (r.Command == "service-pid") return Task.FromResult(target);
+            if (r.Command == "service-pid")
+            {
+                if (cancelAfterLookup) cancel.Cancel();
+                return Task.FromResult(target);
+            }
             Assert.AreEqual(new Request("shutdown-for-update", ServicePid: 42), r);
             throw new InvalidOperationException("instance has changed");
         }
-        var handoff = new UpdateHandoff(Send, (_, _) =>
-        {
-            Assert.AreEqual("42", target);
-            if (cancelAtPrompt) cancel.Cancel();
-            return Task.FromResult(true);
-        }, () => throw new AssertFailedException());
-        Task<string?> Run() => handoff.ApplyIfRunningAsync("1.0.0", "v2.0.0", _ => throw new AssertFailedException(), cancel.Token);
+        var handoff = new UpdateHandoff(Send, () => throw new AssertFailedException("A service that was not stopped must not be started."));
+        Task<string> Run() => handoff.ApplyAsync("v2.0.0", _ => throw new AssertFailedException(), cancel.Token);
         Assert.Contains("invalid process ID", (await Assert.ThrowsExactlyAsync<InvalidDataException>(Run)).Message);
         target = "invalid";
         await Assert.ThrowsExactlyAsync<InvalidDataException>(Run);
         target = "42";
         Assert.Contains("instance has changed", (await Assert.ThrowsExactlyAsync<InvalidOperationException>(Run)).Message);
-        cancelAtPrompt = true;
+        cancelAfterLookup = true;
         await Assert.ThrowsAsync<OperationCanceledException>(Run);
     }
 
@@ -519,8 +502,8 @@ public sealed class HttpTests
             cancel.Cancel();
             t.ThrowIfCancellationRequested();
             return Task.FromResult("stopping");
-        }, (_, _) => Task.FromResult(true), () => { restarts++; return Task.CompletedTask; });
-        var failure = await Assert.ThrowsExactlyAsync<InvalidOperationException>(() => handoff.ApplyIfRunningAsync("1.0.0", "v2.0.0",
+        }, () => { restarts++; return Task.CompletedTask; });
+        var failure = await Assert.ThrowsExactlyAsync<InvalidOperationException>(() => handoff.ApplyAsync("v2.0.0",
             t => { t.ThrowIfCancellationRequested(); throw new AssertFailedException(); }, cancel.Token));
         Assert.IsInstanceOfType<OperationCanceledException>(failure.InnerException);
         Assert.AreEqual(1, restarts);
