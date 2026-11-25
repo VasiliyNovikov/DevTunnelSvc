@@ -189,6 +189,54 @@ public sealed class HttpTests
     }
 
     [TestMethod]
+    [DataRow(true)]
+    [DataRow(false)]
+    public async Task TrayInstallsOnlyTheConfirmedVerifiedReleaseAndRestartsFromTheInstalledPath(bool validDigest)
+    {
+        var directory = Directory.CreateTempSubdirectory("devtunnel-tray-update-");
+        var exe = Path.Combine(directory.FullName, "installed");
+        var bytes = "replacement"u8.ToArray();
+        var windows = OperatingSystem.IsWindows();
+        var archive = windows ? Zip("devtunnelsvc.exe", bytes) : bytes;
+        var name = ReleaseUpdate.AssetName(windows, System.Runtime.InteropServices.RuntimeInformation.ProcessArchitecture);
+        var digest = validDigest ? $"sha256:{Convert.ToHexString(SHA256.HashData(archive))}" : "sha256:wrong";
+        var running = true;
+        var checks = 0;
+        using var http = new HttpClient(new HttpStub((r, _) =>
+        {
+            if (r.RequestUri!.Host == "api.github.com")
+            {
+                Assert.IsTrue(running);
+                checks++;
+                return Task.FromResult(HttpStub.Json(JsonSerializer.Serialize(new { tag_name = "v2.0.0", assets = new[] { new { name, size = archive.Length, digest } } })));
+            }
+            Assert.IsFalse(running);
+            Assert.AreEqual($"https://github.com/VasiliyNovikov/DevTunnelSvc/releases/download/v2.0.0/{name}", r.RequestUri.AbsoluteUri);
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK) { Content = new ByteArrayContent(archive) });
+        }));
+        try
+        {
+            await File.WriteAllTextAsync(exe, "original");
+            var updater = new ReleaseUpdate(http);
+            var tray = new TrayUpdate(t => updater.FindNewerAsync("1.0.0", t),
+                question => { Assert.IsTrue(running); Assert.Contains("v2.0.0", question); return true; },
+                _ => { running = false; return Task.CompletedTask; },
+                (release, t) => updater.ApplyAsync(release, exe, () => InstanceLease.Acquire(directory.FullName), t),
+                async () =>
+                {
+                    using var lease = InstanceLease.Acquire(directory.FullName);
+                    Assert.AreEqual(validDigest ? "replacement" : "original", await File.ReadAllTextAsync(exe));
+                    running = true;
+                });
+            if (validDigest) Assert.Contains("Installed v2.0.0", (await tray.RunAsync("1.0.0", CancellationToken.None))!);
+            else Assert.Contains("SHA-256", (await Assert.ThrowsExactlyAsync<InvalidOperationException>(() => tray.RunAsync("1.0.0", CancellationToken.None))).Message);
+            Assert.AreEqual(1, checks);
+            Assert.IsTrue(running);
+        }
+        finally { directory.Delete(true); }
+    }
+
+    [TestMethod]
     public async Task InvalidPackagesAndVersionsFailClosed()
     {
         using var invalid = new MemoryStream(Zip("../devtunnelsvc.exe", [1]));

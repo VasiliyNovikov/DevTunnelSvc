@@ -3,6 +3,7 @@
   <PropertyGroup>
     <OutputType>Exe</OutputType>
     <AssemblyName>devtunnelsvc</AssemblyName>
+    <ApplicationIcon>Assets\devtunnelsvc.ico</ApplicationIcon>
     <RootNamespace>DevTunnelSvc</RootNamespace>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>

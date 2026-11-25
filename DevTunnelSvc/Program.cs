@@ -52,11 +52,16 @@ internal static class Program
     internal static Task<string> UpdateAsync(bool check, CancellationToken ct) =>
         new ReleaseUpdate(Http).RunAsync(Version, check ? string.Empty : ServiceLifetime.ApplicationExecutable(), check, GetUpdateLease, ct);
 
-    [System.Diagnostics.CodeAnalysis.UnconditionalSuppressMessage("SingleFile", "IL3000", Justification = "An empty Location is the intentional guard for replacing only a single-file distribution.")]
     private static IDisposable GetUpdateLease()
+    {
+        RequireSingleFileUpdate();
+        return InstanceLease.Acquire();
+    }
+
+    [System.Diagnostics.CodeAnalysis.UnconditionalSuppressMessage("SingleFile", "IL3000", Justification = "An empty Location identifies the supported single-file installation.")]
+    internal static void RequireSingleFileUpdate()
     {
         if (typeof(Program).Assembly.Location.Length != 0)
             throw new InvalidOperationException("Only a published single-file executable can self-update.");
-        return InstanceLease.Acquire();
     }
 }

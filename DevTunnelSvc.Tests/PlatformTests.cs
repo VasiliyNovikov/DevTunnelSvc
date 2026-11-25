@@ -149,32 +149,107 @@ public sealed class PlatformTests
         stub.Input.Enqueue((1, 0x300));
         stub.Input.Enqueue((1, 0x400));
         stub.Input.Enqueue((1, 0x10));
-        using (var window = new TrayIcon.WindowsWindow(11, 12, 0x400, stub.Api))
+        using (var window = TrayIcon.CreateOwnerWindow(0x400, () => 12, () => 11, (hwnd, owner) =>
+        { Assert.AreEqual((nint)11, hwnd); stub.Window = owner; }, stub.Api, stub.Menu))
         {
             window.Show();
-            Assert.IsTrue(window.WaitForTaskbarRestart());
-            window.Show();
             window.Close();
-            Assert.IsFalse(window.WaitForTaskbarRestart());
+            window.Run();
         }
-        Assert.AreEqual("notify:0,dispatch:768,notify:0,close:16,notify:2,destroy", string.Join(',', stub.Events));
+        Assert.AreEqual("notify:0,notify:4,close:16,dispatch:768,notify:0,notify:4,quit,notify:2,destroy,free-icon", string.Join(',', stub.Events));
     }
 
     [TestMethod]
     public void WindowAndShellFailuresCannotMasqueradeAsAWorkingTray()
     {
         var stub = new ShellStub();
-        Assert.ThrowsExactly<Win32Exception>(() => new TrayIcon.WindowsWindow(0, 12, 0x400, stub.Api));
-        using (var missingIcon = new TrayIcon.WindowsWindow(11, 0, 0x400, stub.Api))
+        Assert.ThrowsExactly<Win32Exception>(() => new TrayIcon.WindowsWindow(0, 12, 0x400, stub.Api, stub.Menu));
+        using (var missingIcon = new TrayIcon.WindowsWindow(11, 0, 0x400, stub.Api, stub.Menu))
             Assert.Contains("notification-area", Assert.ThrowsExactly<InvalidOperationException>(missingIcon.Show).Message);
-        using var window = new TrayIcon.WindowsWindow(11, 12, 0x400, stub.Api);
+        using var window = stub.Window = new TrayIcon.WindowsWindow(11, 12, 0x400, stub.Api, stub.Menu);
         stub.Success = false;
         Assert.ThrowsExactly<InvalidOperationException>(window.Show);
         Assert.ThrowsExactly<Win32Exception>(window.Close);
         stub.Input.Enqueue((-1, 0));
-        Assert.ThrowsExactly<Win32Exception>(() => window.WaitForTaskbarRestart());
+        Assert.ThrowsExactly<Win32Exception>(window.Run);
         stub.Input.Enqueue((0, 0));
-        Assert.IsFalse(window.WaitForTaskbarRestart());
+        window.Run();
+        // A failure inside the native window callback is propagated by the managed pump.
+        Assert.IsTrue(window.HandleMessage(0x400, 0));
+        Assert.Contains("notification-area", Assert.ThrowsExactly<InvalidOperationException>(window.Run).Message);
+    }
+
+    [TestMethod]
+    public void OnlyTheOwnedIconsContextNotificationOpensTheMenu()
+    {
+        var stub = new ShellStub();
+        using var window = new TrayIcon.WindowsWindow(11, 12, 0x400, stub.Api, stub.Menu);
+        var context = (nint)((1 << 16) | 0x007B);
+        Assert.IsFalse(window.HandleMessage(0x1234, context));
+        window.HandleMessage(TrayIcon.CallbackMessage, (2 << 16) | 0x007B);
+        window.HandleMessage(TrayIcon.CallbackMessage, (1 << 16) | 0x0200); // WM_MOUSEMOVE
+        Assert.IsEmpty(stub.Events);
+        window.HandleMessage(TrayIcon.CallbackMessage, context);
+        Assert.AreEqual("pick,notify:3", string.Join(',', stub.Events));
+    }
+
+    [TestMethod]
+    public void TrayStartupFailureReleasesOnlyTheResourcesAlreadyAcquired()
+    {
+        var stub = new ShellStub();
+        Assert.ThrowsExactly<Win32Exception>(() => TrayIcon.CreateOwnerWindow(0, () => throw new AssertFailedException(),
+            () => throw new AssertFailedException(), (_, _) => Assert.Fail(), stub.Api, stub.Menu));
+        Assert.ThrowsExactly<Win32Exception>(() => TrayIcon.CreateOwnerWindow(0x400, () => 12, () => 0,
+            (_, _) => Assert.Fail(), stub.Api, stub.Menu));
+        Assert.AreEqual("free-icon", stub.Events.Single());
+        stub.Events.Clear();
+        Assert.ThrowsExactly<InvalidOperationException>(() => TrayIcon.CreateOwnerWindow(0x400, () => 12, () => 11,
+            (_, _) => throw new InvalidOperationException("subclass failed"), stub.Api, stub.Menu));
+        Assert.AreEqual("notify:2,destroy,free-icon", string.Join(',', stub.Events));
+    }
+
+    [TestMethod]
+    [DataRow("")]
+    [DataRow("devtunnelsvc.dll")]
+    public void TrayLoadsTheSmallIconFromTheBundleOrManagedModule(string module)
+    {
+        var path = module.Length == 0 ? @"C:\A path\devtunnelsvc.exe" : module;
+        uint count = 1;
+        nint icon = 124;
+        uint Extract(string source, int index, nint large, out nint small, uint requested)
+        {
+            Assert.AreEqual(path, source);
+            Assert.AreEqual(0, index);
+            Assert.AreEqual((nint)0, large);
+            Assert.AreEqual(1u, requested);
+            small = icon;
+            return count;
+        }
+        string Bundle() => module.Length == 0 ? path : throw new AssertFailedException();
+        Assert.AreEqual(icon, TrayIcon.ExtractArtwork(module, Bundle, Extract));
+        count = 0;
+        Assert.Contains("embedded DevTunnelSvc icon", Assert.ThrowsExactly<InvalidOperationException>(() => TrayIcon.ExtractArtwork(module, Bundle, Extract)).Message);
+        count = 1;
+        icon = 0;
+        Assert.ThrowsExactly<InvalidOperationException>(() => TrayIcon.ExtractArtwork(module, Bundle, Extract));
+    }
+
+    [TestMethod]
+    [DataRow(0, "end,quit")]
+    [DataRow(11, "end,quit")]
+    [DataRow(12, "end,close-dialog,quit")]
+    public void ShutdownDismissesMenusAndOwnedDialogsWithoutPostingCloseToItself(int popup, string expected)
+    {
+        List<string> events = [];
+        TrayIcon.Quit(11, () => { events.Add("end"); return true; }, owner => { Assert.AreEqual((nint)11, owner); return popup; },
+            (hwnd, message, w, l) =>
+            {
+                Assert.AreEqual((nint)12, hwnd);
+                Assert.AreEqual(0x10u, message);
+                events.Add("close-dialog");
+                return true;
+            }, exitCode => { Assert.AreEqual(0, exitCode); events.Add("quit"); });
+        Assert.AreEqual(expected, string.Join(',', events));
     }
 
     private sealed class ShellStub
@@ -182,10 +257,24 @@ public sealed class PlatformTests
         public Queue<(int Result, uint Id)> Input { get; } = new();
         public List<string> Events { get; } = [];
         public bool Success { get; set; } = true;
+        public TrayIcon.WindowsWindow? Window { get; set; }
+        public TrayMenu Menu => new(new(() => 21, (_, _, _, _) => true, _ => default, _ => true, (_, _, _, _, _, _) =>
+            { Events.Add("pick"); return 0; }, (_, _, _, _) => true, _ => true), () => Assert.Fail(), () => throw new AssertFailedException(),
+            new((_, text, _, _) => throw new AssertFailedException(text)));
         public TrayIcon.Shell Api => new(Notify, Receive, Dispatch, Close, hwnd =>
         {
             Assert.AreEqual((nint)11, hwnd);
+            Events.Add("quit");
+            Input.Enqueue((0, 0));
+        }, hwnd =>
+        {
+            Assert.AreEqual((nint)11, hwnd);
             Events.Add("destroy");
+            return true;
+        }, icon =>
+        {
+            Assert.AreEqual((nint)12, icon);
+            Events.Add("free-icon");
             return true;
         });
 
@@ -196,8 +285,10 @@ public sealed class PlatformTests
             if (action == 0)
             {
                 Assert.AreEqual((nint)12, data.Icon);
-                Assert.AreEqual(6u, data.Flags);
+                Assert.AreEqual(0x87u, data.Flags);
+                Assert.AreEqual(TrayIcon.CallbackMessage, data.Callback);
             }
+            if (action == 4) Assert.AreEqual(4u, data.Version);
             Events.Add($"notify:{action}");
             return Success;
         }
@@ -207,7 +298,11 @@ public sealed class PlatformTests
             message = new() { Id = next.Id };
             return next.Result;
         }
-        private nint Dispatch(ref TrayIcon.Message message) { Events.Add($"dispatch:{message.Id}"); return 0; }
+        private nint Dispatch(ref TrayIcon.Message message)
+        {
+            if (!Window!.HandleMessage(message.Id, message.LParam)) Events.Add($"dispatch:{message.Id}");
+            return 0;
+        }
         private bool Close(nint hwnd, uint message, nuint w, nint l)
         {
             Assert.AreEqual((nint)11, hwnd);

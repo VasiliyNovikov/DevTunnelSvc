@@ -1,4 +1,5 @@
 using System.CommandLine;
+using System.Runtime.Versioning;
 using DevTunnelSvc.Auth;
 using DevTunnelSvc.Platform;
 using DevTunnelSvc.Service;
@@ -36,6 +37,7 @@ internal sealed class Commands(TextWriter output, TextWriter error, Func<Request
         var update = Action("update", (r, ct) => localActions.Update(r.GetValue(check), ct));
         update.Options.Add(check);
         root.Subcommands.Add(update);
+        if (OperatingSystem.IsWindows()) root.Subcommands.Add(TrayUpdateCommand());
         var parsed = root.Parse(args);
         if (parsed.Errors.Count != 0)
         {
@@ -49,6 +51,16 @@ internal sealed class Commands(TextWriter output, TextWriter error, Func<Request
             EnableDefaultExceptionHandler = false,
             ProcessTerminationTimeout = TimeSpan.FromSeconds(30)
         });
+    }
+
+    [SupportedOSPlatform("windows")]
+    private static Command TrayUpdateCommand()
+    {
+        var pid = new Argument<int>("service-pid");
+        var command = new Command(TrayMenu.UpdateWorker) { Hidden = true };
+        command.Arguments.Add(pid);
+        command.SetAction((r, ct) => TrayUpdate.FromMenuAsync(r.GetRequiredValue(pid), ct));
+        return command;
     }
 
     private Command Login()

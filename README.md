@@ -90,6 +90,8 @@ If upgrading from a memory-only build, stop the old service before replacing the
 
 `status` lists mapping names and SDK connection states. `stop NAME` removes one mapping. `delete TUNNEL` deletes the cloud tunnel explicitly; stopping a mapping does not. V1 supports one hosted mapping per tunnel at a time. Mappings are still in memory: after a restart reissue `host` or `connect`, not `login`.
 
+<img src="DevTunnelSvc/Assets/devtunnelsvc.png" width="32" height="32" alt="Teal tunnel and outbound arrow"> On Windows, right-click the notification-area icon for **Update**, **About**, or **Exit**. Update checks for a newer stable release before asking for confirmation. Confirming stops all active port mappings, installs the verified release, and restarts the service. Start your mappings again afterward. About shows the running version; Exit stops the service and its mappings without signing you out or removing its startup registration.
+
 ```shell
 devtunnelsvc update --check
 devtunnelsvc service stop

@@ -34,6 +34,8 @@ The Dockerfile builds on UBI 8, runs the exact binary offline in a clean UBI 8 i
 
 Omit the version for a `0.0.0-dev` package. The release script runs `--version` and `--help` on the actual deliverable (after extraction on Windows). Keep the [asset names](README.md#manual-download) stable for the installers and CLI self-update. The executable is lowercase: Windows ZIPs contain only `devtunnelsvc.exe`; Linux ships the standalone `devtunnelsvc` binary under a RID-suffixed asset name. Both are written to `artifacts/packages/<rid>/`.
 
+The Windows tray loads its small icon from the executable's `ApplicationIcon` resource; do not require a loose image at runtime. Tray updates run in a separate process: confirm the selected release, stop only the original service instance, wait for its lease to be released, then use the same verified installer as the CLI and restart from the installed path.
+
 To publish, tag the intended commit (for example `git tag -a v1.2.3 -m "Release v1.2.3"`) and push **that tag** (`git push origin v1.2.3`). CI stamps the version without `v` into each executable. Only a tag push can create a GitHub Release, and only after the Windows/Linux x64 and Arm64 packages, tests, and quality gates pass. CI uploads the already smoke-tested assets without rebuilding and generates release notes. A tag such as `v1.2.3-rc.1` creates a prerelease, not the latest stable release.
 
 ## Build and test

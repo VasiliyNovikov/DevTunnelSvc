@@ -108,20 +108,26 @@ public sealed class LifetimeTests
     }
 
     [TestMethod]
-    public async Task LosingTheTrayStopsTheServiceAndReportsTheFailure()
+    [DataRow(false)]
+    [DataRow(true)]
+    public async Task TrayExitStopsTheServiceAndOnlyFailuresAreReportedAsErrors(bool fail)
     {
         var directory = Directory.CreateTempSubdirectory("devtunnel-tray-error-");
         using var limit = new CancellationTokenSource(TimeSpan.FromSeconds(5));
         using var owner = new MemoryStream();
-        Action<Exception>? signal = null;
+        Action<Exception?>? signal = null;
         try
         {
             var service = ServiceLifetime.RunAsync(TextWriter.Null, $"devtunnel-{Guid.NewGuid():N}", directory.FullName, limit.Token,
                 callback => { signal = callback; return owner; });
             Assert.IsNotNull(signal);
-            signal(new IOException("Explorer unavailable"));
-            var error = await Assert.ThrowsExactlyAsync<InvalidOperationException>(() => service.WaitAsync(limit.Token));
-            Assert.Contains("Explorer unavailable", error.Message);
+            signal(fail ? new IOException("Explorer unavailable") : null);
+            if (fail)
+            {
+                var error = await Assert.ThrowsExactlyAsync<InvalidOperationException>(() => service.WaitAsync(limit.Token));
+                Assert.Contains("Explorer unavailable", error.Message);
+            }
+            else await service.WaitAsync(limit.Token);
             Assert.IsFalse(owner.CanWrite);
         }
         finally { directory.Delete(true); }
@@ -150,24 +156,26 @@ public sealed class LifetimeTests
     }
 
     [TestMethod]
-    public void TrayReregistersAfterExplorerRestartsAndCleansUpOnOwnerThread()
+    public void TrayShowsAndCleansUpOnOwnerThread()
     {
         using var window = new Window();
-        using (var tray = new TrayIcon(() => window, ex => Assert.Fail(ex.Message)))
+        var closed = false;
+        using (var tray = new TrayIcon(() => window, ex => { Assert.IsNull(ex); closed = true; }))
         {
             Assert.AreEqual(1, window.Shows);
-            window.Events.Add(true);
-            Assert.IsTrue(window.ShownAgain.Wait(TimeSpan.FromSeconds(2)));
+            Assert.IsTrue(window.Running.Wait(TimeSpan.FromSeconds(2)));
         }
-        Assert.AreEqual(2, window.Shows);
+        Assert.AreEqual(1, window.Shows);
         Assert.IsTrue(window.DisposedOnOwner);
+        Assert.IsTrue(window.CloseRequested);
+        Assert.IsTrue(closed);
     }
 
     [TestMethod]
     public void TrayCreationFailureAndRuntimeFailureReachTheService()
     {
         Assert.ThrowsExactly<InvalidOperationException>(() => new TrayIcon(() => throw new InvalidOperationException("no session"), _ => { }));
-        using var window = new Window { BreakOnRestart = true };
+        using var window = new Window();
         using var failed = new ManualResetEventSlim();
         using var tray = new TrayIcon(() => window, ex => { if (ex is IOException) failed.Set(); });
         window.Events.Add(true);
@@ -196,23 +204,23 @@ public sealed class LifetimeTests
     private sealed class Window : TrayIcon.IWindow
     {
         internal BlockingCollection<bool> Events { get; } = new();
-        internal ManualResetEventSlim ShownAgain { get; } = new();
-        internal bool BreakOnRestart { get; init; }
+        internal ManualResetEventSlim Running { get; } = new();
         internal int Shows { get; private set; }
         internal bool DisposedOnOwner { get; private set; }
+        internal bool CloseRequested { get; private set; }
         private int owner;
 
         public void Show()
         {
             owner = Environment.CurrentManagedThreadId;
-            if (++Shows == 2)
-            {
-                if (BreakOnRestart) throw new IOException("no taskbar");
-                ShownAgain.Set();
-            }
+            Shows++;
         }
-        public bool WaitForTaskbarRestart() => Events.TryTake(out var restart, 3000) && restart;
-        public void Close() => Events.Add(false);
+        public void Run()
+        {
+            Running.Set();
+            if (Events.TryTake(out var fail, 3000) && fail) throw new IOException("no taskbar");
+        }
+        public void Close() { CloseRequested = true; Events.Add(false); }
         public void Dispose()
         {
             if (owner == Environment.CurrentManagedThreadId) DisposedOnOwner = true;

@@ -169,6 +169,32 @@ public sealed class ServiceTests : IDisposable
     }
 
     [TestMethod]
+    public async Task TrayUpdateStopsOnlyItsOriginalServiceAndPreservesSavedSignIn()
+    {
+        var backend = new TestBackend();
+        await using var state = new TunnelService(backend, credential);
+        var name = $"DevTunnelSvc-tray-update-{Guid.NewGuid():N}";
+        using var limit = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        var server = ControlServer.RunAsync(name, state, TextWriter.Null, limit.Token);
+        Task<string> Send(Request r) => Control.SendAsync(r, limit.Token, name);
+        try
+        {
+            await Send(new("login", SignIn: new("test-only-token")));
+            await Send(new("host", "blue-tunnel.use2", 8080, 3000));
+            foreach (var pid in new int?[] { null, -1 })
+                Assert.Contains("instance has changed", (await Assert.ThrowsExactlyAsync<InvalidOperationException>(
+                    () => Send(new("shutdown-for-update", ServicePid: pid)))).Message);
+            Assert.IsFalse(backend.Sessions.Single().Disposed);
+            Assert.Contains("host:blue-tunnel", await Send(new("status")));
+            await TrayUpdate.StopOriginalAsync(Environment.ProcessId, (request, t) => Control.SendAsync(request, t, name),
+                t => server.WaitAsync(t), limit.Token);
+            Assert.IsTrue(backend.Sessions.Single().Disposed);
+            Assert.AreEqual("test-only-token", await credential.RequireTokenAsync(limit.Token));
+        }
+        finally { await limit.CancelAsync(); await server; }
+    }
+
+    [TestMethod]
     public async Task MalformedClientCannotStopOrPoisonTheNextControlConnection()
     {
         await using var service = new TunnelService(new TestBackend(), credential);

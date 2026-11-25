@@ -13,30 +13,23 @@ internal static class ServiceLifetime
     private const string Unit = "devtunnelsvc.service";
     private const string StartupKey = @"Software\Microsoft\Windows\CurrentVersion\Run";
 
-    public static Task RunAsync(TextWriter log, CancellationToken ct) => RunAsync(log, Control.PipeName, null, ct,
-        OperatingSystem.IsWindows() ? CreateWindowsTray : null);
-
-    [SupportedOSPlatform("windows")]
-    private static TrayIcon CreateWindowsTray(Action<Exception> failed) => new(failed);
+    public static Task RunAsync(TextWriter log, CancellationToken ct) => RunAsync(log, Control.PipeName, null, ct, TrayLifetime.ForCurrentPlatform);
 
     internal static async Task RunAsync(TextWriter log, string name, string? stateDirectory, CancellationToken ct,
-        Func<Action<Exception>, IDisposable>? createTray = null)
+        Func<Action<Exception?>, IDisposable>? createTray = null)
     {
         using var instance = InstanceLease.Acquire(stateDirectory);
         using var lifetime = CancellationTokenSource.CreateLinkedTokenSource(ct);
         using var term = OperatingSystem.IsLinux() ? PosixSignalRegistration.Create(PosixSignal.SIGTERM,
             signal => { signal.Cancel = true; lifetime.Cancel(); }) : null;
-        Exception? trayFailure = null;
-        using var tray = createTray?.Invoke(ex => { Volatile.Write(ref trayFailure, ex); lifetime.Cancel(); });
+        using var tray = new TrayLifetime(createTray);
         using var http = GitHubOAuth.CreateClient();
         http.Timeout = TimeSpan.FromSeconds(20);
         using var credential = new SessionCredential(new CredentialFile(stateDirectory ?? InstanceLease.DefaultDirectory),
             (token, tokenCt) => GitHubOAuth.RefreshAsync(http, token, tokenCt), TimeProvider.System);
         await using var backend = new TunnelBackend(() => credential.RequireTokenAsync(lifetime.Token));
         await using var service = new TunnelService(backend, credential);
-        await ControlServer.RunAsync(name, service, log, lifetime.Token);
-        if (Volatile.Read(ref trayFailure) is { } failure)
-            throw new InvalidOperationException($"Notification-area icon failed: {failure.Message}", failure);
+        await tray.WaitAsync(ControlServer.RunAsync(name, service, log, lifetime.Token), lifetime);
     }
 
     public static Task<string> StartAsync(CancellationToken ct) => StartAsync(OperatingSystem.IsWindows(),
@@ -129,7 +122,7 @@ internal static class ServiceLifetime
             throw new InvalidOperationException($"systemctl --user {args[0]} failed ({code}).");
     }
 
-    private static async Task<int> ExitCodeAsync(ProcessStartInfo info, CancellationToken ct)
+    internal static async Task<int> ExitCodeAsync(ProcessStartInfo info, CancellationToken ct)
     {
         using var process = Process.Start(info)!;
         await process.WaitForExitAsync(ct);

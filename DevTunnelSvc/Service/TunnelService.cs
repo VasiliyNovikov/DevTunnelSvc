@@ -22,6 +22,8 @@ internal sealed class TunnelService(ITunnelBackend backend, SessionCredential cr
             "host" or "connect" => OpenAsync(Mapping.Create(request.Command == "host", request.Tunnel, request.TunnelPort, request.LocalPort), ct),
             "stop" => StopAsync(request.Tunnel),
             "shutdown" => EndSessionAsync(logout: false),
+            "shutdown-for-update" => request.ServicePid == Environment.ProcessId ? EndSessionAsync(logout: false)
+                : throw new InvalidOperationException("The selected service instance has changed. Check for updates again."),
             _ => throw new ArgumentException("Unknown service command."),
         };
     }

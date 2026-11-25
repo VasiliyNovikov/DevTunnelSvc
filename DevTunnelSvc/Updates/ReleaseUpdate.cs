@@ -21,12 +21,24 @@ internal sealed class ReleaseUpdate(HttpClient http)
 
     public async Task<string> RunAsync(string current, string executable, bool checkOnly, Func<IDisposable> acquireUpdateLease, CancellationToken ct)
     {
-        var release = await http.GetFromJsonAsync(Latest, ReleaseJson.Default.ReleaseInfo, ct)
-            ?? throw new InvalidDataException("GitHub returned no release.");
-        if (!IsNewer(current, release.TagName))
+        var release = await FindNewerAsync(current, ct);
+        if (release is null)
             return $"Already up to date ({current}).";
         if (checkOnly)
             return $"Available: {release.TagName} (installed: {current}).";
+        await ApplyAsync(release, executable, acquireUpdateLease, ct);
+        return $"Installed {release.TagName}. Run 'service start' to restart the service.";
+    }
+
+    internal async Task<ReleaseInfo?> FindNewerAsync(string current, CancellationToken ct)
+    {
+        var release = await http.GetFromJsonAsync(Latest, ReleaseJson.Default.ReleaseInfo, ct)
+            ?? throw new InvalidDataException("GitHub returned no release.");
+        return IsNewer(current, release.TagName) ? release : null;
+    }
+
+    internal async Task ApplyAsync(ReleaseInfo release, string executable, Func<IDisposable> acquireUpdateLease, CancellationToken ct)
+    {
         using var lease = acquireUpdateLease();
         var name = AssetName(OperatingSystem.IsWindows(), RuntimeInformation.ProcessArchitecture);
         var asset = release.Assets.SingleOrDefault(a => a.Name == name)
@@ -36,7 +48,6 @@ internal sealed class ReleaseUpdate(HttpClient http)
         response.EnsureSuccessStatusCode();
         using var stream = await response.Content.ReadAsStreamAsync(ct);
         await InstallAsync(executable, asset, stream, ct);
-        return $"Installed {release.TagName}. Run 'service start' to restart the service.";
     }
 
     internal static string AssetName(bool windows, Architecture architecture)

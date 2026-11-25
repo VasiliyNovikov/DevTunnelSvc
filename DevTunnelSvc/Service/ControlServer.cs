@@ -45,6 +45,6 @@ internal static class ControlServer
         using var writeTimeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
         writeTimeout.CancelAfter(TimeSpan.FromSeconds(5));
         await Control.WriteAsync(pipe, reply, ControlJson.Default.Reply, writeTimeout.Token);
-        return reply.Success && request.Command == "shutdown";
+        return reply.Success && request.Command is "shutdown" or "shutdown-for-update";
     }
 }
