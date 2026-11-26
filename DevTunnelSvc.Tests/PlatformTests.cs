@@ -60,7 +60,7 @@ public sealed class PlatformTests
     }
 
     [TestMethod]
-    public async Task ClipboardFallsBackAndWritesTheExactCodeThroughStdin()
+    public async Task ClipboardFallsBackAndSendsOnlyTheUserCodeEvenToANoisyWriter()
     {
         var dir = Directory.CreateTempSubdirectory("devtunnel-clipboard-");
         try
@@ -69,8 +69,9 @@ public sealed class PlatformTests
             var rejected = OperatingSystem.IsWindows() ? new ProcessStartInfo("cmd.exe", ["/d", "/c", "exit", "/b", "7"]) : new ProcessStartInfo("/bin/false");
             var capture = OperatingSystem.IsWindows()
                 ? new ProcessStartInfo("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command",
+                    "[Console]::Out.Write('o'*262144); [Console]::Error.Write('e'*262144); " +
                     "$f=[IO.File]::Create('input'); try { [Console]::OpenStandardInput().CopyTo($f) } finally { $f.Dispose() }"])
-                : new ProcessStartInfo("/bin/sh", ["-c", "cat > input"]);
+                : new ProcessStartInfo("/bin/sh", ["-c", "head -c 262144 /dev/zero; head -c 262144 /dev/zero >&2; cat > input"]);
             capture.WorkingDirectory = dir.FullName;
             using var limit = new CancellationTokenSource(TimeSpan.FromSeconds(15));
             Assert.IsTrue(await LoginClipboard.TryCopyAsync("ABCD-1234", [missing, rejected, capture], TimeSpan.FromSeconds(8), limit.Token));

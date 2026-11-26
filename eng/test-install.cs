@@ -187,8 +187,7 @@ static async Task RunAsync(ProcessStartInfo info, string? inputFile = null, stri
     if (inputFile is not null) info.StandardInputEncoding = new UTF8Encoding(false);
     using var child = Process.Start(info) ?? throw new InvalidOperationException($"Could not start {info.FileName}.");
     using var timeout = new CancellationTokenSource(TimeSpan.FromMinutes(inputFile is null ? 5 : 1));
-    var output = child.StandardOutput.ReadToEndAsync(timeout.Token);
-    var error = child.StandardError.ReadToEndAsync(timeout.Token);
+    var capture = child.ReadAllTextAsync(timeout.Token);
     try
     {
         if (inputFile is not null)
@@ -197,10 +196,11 @@ static async Task RunAsync(ProcessStartInfo info, string? inputFile = null, stri
             using var stdin = child.StandardInput;
             await source.CopyToAsync(stdin.BaseStream, timeout.Token);
         }
-        await child.WaitForExitAsync(timeout.Token);
-        var text = await output + await error;
-        if (expectedError is null ? child.ExitCode != 0 : child.ExitCode == 0 || !text.Contains(expectedError, StringComparison.Ordinal))
-            throw new InvalidOperationException($"{info.FileName} exited with {child.ExitCode}, expected {expectedError ?? "success"}: {text}");
+        var status = await child.WaitForExitStatusAsync(timeout.Token);
+        var (output, error) = await capture;
+        var text = output + error;
+        if (expectedError is null ? status.ExitCode != 0 : status.ExitCode == 0 || !text.Contains(expectedError, StringComparison.Ordinal))
+            throw new InvalidOperationException($"{info.FileName} exited with {status.ExitCode}, expected {expectedError ?? "success"}: {text}");
     }
     catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or OperationCanceledException)
     {

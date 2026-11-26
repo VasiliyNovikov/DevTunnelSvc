@@ -506,7 +506,10 @@ public sealed class HttpTests
             Task<int> Run(ProcessStartInfo info, CancellationToken t)
             {
                 Assert.AreEqual(installed, info.FileName, "Never start a service from the disposable copy.");
-                Assert.IsTrue(info.CreateNoWindow && info.RedirectStandardOutput && t.CanBeCanceled);
+                Assert.IsTrue(info.CreateNoWindow && t.CanBeCanceled);
+                Assert.IsTrue(info.StandardOutputHandle is { IsClosed: false, IsInvalid: false });
+                Assert.IsFalse(info.RedirectStandardError);
+                Assert.IsNull(info.StandardErrorHandle, "Keep restart diagnostics on the caller's stderr.");
                 using var free = InstanceLease.Acquire(state);
                 commands.Add(string.Join(' ', info.ArgumentList));
                 return Task.FromResult(0);

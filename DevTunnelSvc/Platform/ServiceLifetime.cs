@@ -3,6 +3,7 @@ using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
 using DevTunnelSvc.Service;
 using Microsoft.Win32;
+using Microsoft.Win32.SafeHandles;
 
 namespace DevTunnelSvc.Platform;
 
@@ -126,9 +127,7 @@ internal static class ServiceLifetime
 
     internal static async Task<int> ExitCodeAsync(ProcessStartInfo info, CancellationToken ct)
     {
-        using var process = Process.Start(info) ?? throw new InvalidOperationException($"Could not start {info.FileName}.");
-        if (info.RedirectStandardOutput) await process.StandardOutput.BaseStream.CopyToAsync(Stream.Null, ct);
-        await process.WaitForExitAsync(ct);
-        return process.ExitCode;
+        using var process = SafeProcessHandle.Start(info);
+        return (await process.WaitForExitAsync(ct)).ExitCode;
     }
 }

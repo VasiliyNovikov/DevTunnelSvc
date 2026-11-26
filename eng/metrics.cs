@@ -17,8 +17,7 @@ var report = Path.Combine(directory.FullName, "report.json");
 File.Delete(report);
 
 // Also enforce the four SDK analyzer thresholds when this check runs outside CI.
-using var build = Process.Start(new ProcessStartInfo("dotnet", ["build", projectFile, "-c", "Release"]))!;
-await build.WaitForExitAsync();
+var build = await Process.RunAsync("dotnet", ["build", projectFile, "-c", "Release"]);
 if (build.ExitCode != 0)
     return build.ExitCode;
 

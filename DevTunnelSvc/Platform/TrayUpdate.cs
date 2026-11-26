@@ -1,9 +1,9 @@
-using System.Diagnostics;
 using System.Globalization;
 using System.Runtime.Versioning;
 using DevTunnelSvc.Auth;
 using DevTunnelSvc.Service;
 using DevTunnelSvc.Updates;
+using Microsoft.Win32.SafeHandles;
 
 namespace DevTunnelSvc.Platform;
 
@@ -28,8 +28,7 @@ internal sealed class TrayUpdate(Func<CancellationToken, Task<ReleaseInfo?>> fin
         var dialogs = TrayMenu.SystemDialogs;
         return WithFeedbackAsync(async () =>
         {
-            using var service = Process.GetProcessById(servicePid);
-            _ = service.SafeHandle; // Pin the selected instance through staging, confirmation and installation.
+            using var service = SafeProcessHandle.Open(servicePid); // Pin this instance through confirmation and installation.
             using var http = GitHubOAuth.CreateClient();
             var message = await new ReleaseUpdate(http).CheckAsync(Program.Version, false, (release, t) =>
             {
@@ -51,8 +50,7 @@ internal sealed class TrayUpdate(Func<CancellationToken, Task<ReleaseInfo?>> fin
         var installed = UpdateWorker.InstalledPath(image);
         var directory = InstanceLease.DefaultDirectory;
         var log = new AppLog(directory, "update", Console.Error.WriteLine);
-        using var service = Process.GetProcessById(servicePid);
-        _ = service.SafeHandle;
+        using var service = SafeProcessHandle.Open(servicePid);
         using var http = GitHubOAuth.CreateClient();
         var updater = new ReleaseUpdate(http);
         var flow = new TrayUpdate(async t =>

@@ -24,8 +24,7 @@ try
     var publishDir = Path.Combine(staging.FullName, "publish");
     string[] publishArgs = ["publish", Path.Combine(root, "DevTunnelSvc", "DevTunnelSvc.csproj"),
         "-c", "Release", "-r", rid, "--self-contained", "true", $"-p:Version={version}", "-o", publishDir];
-    using var publish = Process.Start(new ProcessStartInfo("dotnet", publishArgs) { WorkingDirectory = root })!;
-    publish.WaitForExit();
+    var publish = Process.Run(new ProcessStartInfo("dotnet", publishArgs) { WorkingDirectory = root });
     if (publish.ExitCode != 0)
         return publish.ExitCode;
 
@@ -84,16 +83,16 @@ static string? GetReleaseRid()
 
 static string RunCli(string executable, string option)
 {
-    using var process = Process.Start(new ProcessStartInfo(executable, [option])
+    var result = Process.RunAndCaptureText(new ProcessStartInfo(executable, [option])
     {
         WorkingDirectory = Path.GetDirectoryName(executable)!,
         RedirectStandardOutput = true,
-    })!;
-    var output = process.StandardOutput.ReadToEnd();
-    process.WaitForExit();
-    if (process.ExitCode != 0)
-        throw new InvalidOperationException($"{option} exited with code {process.ExitCode}.");
-    return output.TrimEnd('\r', '\n');
+        RedirectStandardError = true,
+    });
+    Console.Error.Write(result.StandardError);
+    if (result.ExitStatus.ExitCode != 0)
+        throw new InvalidOperationException($"{option} exited with code {result.ExitStatus.ExitCode}.");
+    return result.StandardOutput.TrimEnd('\r', '\n');
 }
 
 static bool IsReleaseVersion(string value)

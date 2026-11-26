@@ -72,14 +72,15 @@ internal sealed record UpdateHandoff(Func<Request, CancellationToken, Task<strin
     {
         // The installed CLI may speak a newer pipe protocol than the updater.
         using var limit = new CancellationTokenSource(TimeSpan.FromMinutes(2));
+        using var sink = File.OpenNullHandle();
         async Task<(string Command, int Code)> StartAndProbeAsync()
         {
             trace?.Invoke("Launching installed service start.");
-            var start = await run(new(executable, ["service", "start"]) { CreateNoWindow = true, RedirectStandardOutput = true }, limit.Token);
+            var start = await run(new(executable, ["service", "start"]) { CreateNoWindow = true, StandardOutputHandle = sink }, limit.Token);
             trace?.Invoke($"service start exit code: {start}.");
             if (start != 0) return ("service start", start);
             // Probe after the short-lived starter exits, using the newly installed protocol.
-            var status = new ProcessStartInfo(executable, ["status"]) { CreateNoWindow = true, RedirectStandardOutput = true };
+            var status = new ProcessStartInfo(executable, ["status"]) { CreateNoWindow = true, StandardOutputHandle = sink };
             var code = await run(status, limit.Token);
             trace?.Invoke($"status exit code: {code}.");
             return ("status", code);

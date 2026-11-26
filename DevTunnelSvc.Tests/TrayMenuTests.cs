@@ -12,12 +12,13 @@ namespace DevTunnelSvc.Tests;
 public sealed class TrayMenuTests
 {
     [TestMethod]
-    public async Task StatusProbeDiscardsAFullOutputPipeAndReturnsTheInstalledClisExitCode()
+    public async Task StatusProbeDiscardsLargeOutputAndReturnsTheInstalledClisExitCode()
     {
         var probe = OperatingSystem.IsWindows()
             ? new ProcessStartInfo("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", "[Console]::Write('x' * 262144); exit 7"])
             : new ProcessStartInfo("/bin/sh", ["-c", "head -c 262144 /dev/zero; exit 7"]);
-        probe.RedirectStandardOutput = true;
+        using var sink = File.OpenNullHandle();
+        probe.StandardOutputHandle = sink;
         probe.CreateNoWindow = true;
         using var limit = new CancellationTokenSource(TimeSpan.FromSeconds(10));
         Assert.AreEqual(7, await ServiceLifetime.ExitCodeAsync(probe, limit.Token));

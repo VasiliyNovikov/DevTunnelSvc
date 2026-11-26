@@ -34,8 +34,7 @@ static string Publish(string fixture, string rid, DirectoryInfo output, string v
     var info = new ProcessStartInfo("dotnet", ["publish", fixture, "-c", "Release", "-r", rid,
         "--self-contained", "true", $"-p:Version={version}", $"-p:DebugType={debugType}", "-o", output.FullName, "--verbosity", "quiet"])
     { WorkingDirectory = Path.GetDirectoryName(fixture)! };
-    using var publish = Process.Start(info) ?? throw new InvalidOperationException("Could not start dotnet publish.");
-    publish.WaitForExit();
+    var publish = Process.Run(info);
     if (publish.ExitCode != 0) throw new InvalidOperationException($"Publishing fixture {version} failed ({publish.ExitCode}).");
     return Path.Combine(output.FullName, "DevTunnelSvc.UpdateSmoke.exe");
 }
@@ -109,16 +108,21 @@ internal sealed class FixtureCli(string image, string state)
         var info = new ProcessStartInfo(image, args) { UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true, RedirectStandardError = true };
         info.Environment["DEVTUNNELSVC_SMOKE_STATE"] = state;
         using var process = Process.Start(info)!;
-        var stdout = process.StandardOutput.ReadToEndAsync();
-        var stderr = process.StandardError.ReadToEndAsync();
+        using var drain = new CancellationTokenSource();
+        var capture = process.ReadAllTextAsync(drain.Token);
         var command = string.Join(' ', args);
-        if (!process.WaitForExit(60_000))
+        try
         {
-            Terminate(process, entireTree: true);
-            throw new TimeoutException($"Timed out: {command}");
+            if (!process.WaitForExit(60_000))
+            {
+                Terminate(process, entireTree: true);
+                throw new TimeoutException($"Timed out: {command}");
+            }
+            if (!capture.Wait(5_000)) throw new TimeoutException($"Child held the CLI streams open: {command}");
         }
-        if (!Task.WaitAll([stdout, stderr], 5_000)) throw new TimeoutException($"Child held the CLI streams open: {command}");
-        var text = (stdout.Result + stderr.Result).Trim();
+        finally { drain.Cancel(); }
+        var (stdout, stderr) = capture.GetAwaiter().GetResult();
+        var text = (stdout + stderr).Trim();
         if (expectedExitCodes.Length == 0 ? process.ExitCode != 0 : !expectedExitCodes.Contains(process.ExitCode))
             throw new InvalidOperationException($"{command} returned {process.ExitCode}: {text}");
         return text;

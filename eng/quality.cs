@@ -80,10 +80,5 @@ static int Mutation(string root)
     return 0;
 }
 
-static int Dotnet(string directory, params string[] arguments)
-{
-    using var process = Process.Start(new ProcessStartInfo("dotnet", arguments) { WorkingDirectory = directory })
-        ?? throw new InvalidOperationException("Could not start the .NET CLI.");
-    process.WaitForExit();
-    return process.ExitCode;
-}
+static int Dotnet(string directory, params string[] arguments) =>
+    Process.Run(new ProcessStartInfo("dotnet", arguments) { WorkingDirectory = directory }).ExitCode;

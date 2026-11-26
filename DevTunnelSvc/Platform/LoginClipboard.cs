@@ -51,16 +51,15 @@ internal static class LoginClipboard
         writer.CreateNoWindow = true;
         writer.RedirectStandardInput = true;
         writer.StandardInputEncoding = Utf8WithoutBom;
-        // A Linux clipboard owner can outlive login. Don't let it inherit the CLI's output pipes.
-        writer.RedirectStandardOutput = true;
-        writer.RedirectStandardError = true;
+        // A clipboard owner may outlive login. Discard its output without leaving any pipes to drain.
+        using var sink = File.OpenNullHandle();
+        writer.StandardOutputHandle = writer.StandardErrorHandle = sink;
         using var helper = Process.Start(writer)!;
         try
         {
             using (var input = helper.StandardInput)
                 await input.WriteAsync(userCode.AsMemory(), ct);
-            await helper.WaitForExitAsync(ct);
-            return helper.ExitCode == 0;
+            return (await helper.WaitForExitStatusAsync(ct)).ExitCode == 0;
         }
         finally
         {
