@@ -31,6 +31,7 @@ internal sealed class Commands(TextWriter output, TextWriter error, Func<Request
         root.Subcommands.Add(Create());
         root.Subcommands.Add(Login());
         root.Subcommands.Add(WithName("stop", "mapping"));
+        root.Subcommands.Add(WithName("disconnect", "mapping"));
         root.Subcommands.Add(WithName("delete", "tunnel"));
         root.Subcommands.Add(Forward(true));
         root.Subcommands.Add(Forward(false));

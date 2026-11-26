@@ -12,14 +12,16 @@ internal static class Program
         Usage: devtunnelsvc <command> [options]
           service install|start|run|stop   Manage the per-user background service
           login [--no-browser] [--no-clipboard]  Sign in with GitHub
-          logout                          Stop mappings and remove the saved GitHub sign-in
+          logout                          Forget all mappings and remove the saved GitHub sign-in
           create [--region <region>]      Create a private tunnel in the recommended or chosen region
           delete <tunnel>                 Delete an owned tunnel
           list                            Show your tunnels' host and client counts, expiration, and ports
           regions                         Compare regions by latency from this machine and recommendation
           host <tunnel> --tunnel-port N --target-port N
           connect <tunnel> --tunnel-port N --listen-port N
-          status | stop <mapping>         Inspect or stop a forwarding session
+          status                          Show active and restoring mappings
+          stop <mapping>                  Stop and forget a host or client mapping
+          disconnect <mapping>            Close and forget a client connection
           update [--check] [--force]      Check or install a newer release; --force also stops and starts the service without asking
           --version                       Print the embedded release version
         """;

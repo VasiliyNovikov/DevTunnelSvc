@@ -87,11 +87,13 @@ If upgrading from a memory-only build, stop the old service before replacing the
 - **Windows:** `%LOCALAPPDATA%\DevTunnelSvc\auth\github.dpapi`, encrypted with Windows Data Protection (DPAPI) for the signed-in user.
 - **Linux:** `$XDG_DATA_HOME/DevTunnelSvc/auth/github.json` (normally `~/.local/share/DevTunnelSvc/auth/github.json`). The file is **not encrypted**: it is readable and writable only by its owner (`0600`) inside a private directory (`0700`). This works without a desktop keyring. Protect backups and disk access accordingly.
 
-`devtunnelsvc logout` stops active mappings and deletes the local saved credential; it does not revoke the GitHub App authorization or delete cloud tunnels. To revoke the authorization itself, use your GitHub account settings.
+`devtunnelsvc logout` stops and forgets this account's mappings and deletes the local saved credential; it does not revoke the GitHub App authorization or delete cloud tunnels. To revoke the authorization itself, use your GitHub account settings.
 
 ## Stop, update, and remove
 
-`status` lists this service's mapping names and SDK connection states; `list` queries your account's tunnels instead. `stop NAME` removes one mapping. `delete TUNNEL` deletes the cloud tunnel explicitly; stopping a mapping does not. V1 supports one hosted mapping per tunnel at a time. Mappings are still in memory: after a restart reissue `host` or `connect`, not `login`.
+Successful `host` and `connect` commands save their tunnel ID and exact ports in the per-user `DevTunnelSvc` state directory (`mappings.json`, separate from sign-in). The service re-hosts and reconnects these mappings on startup, including after an update. An offline peer doesn't block startup or other mappings: `devtunnelsvc status` shows which mappings are restoring or retrying. Failed restores retry every 30 seconds; `list` queries your cloud tunnels instead.
+
+Use the mapping name from `status` to close **and forget** one mapping: for example, `devtunnelsvc disconnect connect:blue-tunnel.use2:5000` for a client, or `devtunnelsvc stop host:blue-tunnel.use2` for a host. `stop` also accepts client mappings. Neither command deletes the cloud tunnel; only `delete TUNNEL` does that. One hosted mapping is supported per tunnel at a time. `service stop` and tray **Exit** preserve mappings for the next start. When upgrading from v0.1.6 or earlier, reissue `host` and `connect` once: those versions never saved their mappings.
 
 <img src="DevTunnelSvc/Assets/devtunnelsvc.png" width="32" height="32" alt="Teal tunnel and outbound arrow"> On Windows, right-click the notification-area icon for **Status**, **Update**, **About**, or **Exit**. **Status** shows the same sign-in state and active mappings as `devtunnelsvc status`. **About** shows the running version. Both dialogs and the menu follow the Windows app theme and respect high contrast; older Windows versions use the native menu colors. **Exit** stops the service and its mappings without signing you out or removing its startup registration.
 
@@ -100,7 +102,7 @@ devtunnelsvc update --check
 devtunnelsvc update --force
 ```
 
-On both platforms, `update --check` only reports availability. `update --force` checks for a newer stable release first. Without asking, it stops a running service, verifies the release asset's SHA-256 digest, installs it, and starts the service, even if the service was stopped beforehand or the install failed. The Windows tray's **Update** action does the same for its running service but asks first. **Start your port mappings again afterward**; the saved sign-in is preserved. If you're already up to date, nothing is stopped, reinstalled, or started.
+On both platforms, `update --check` only reports availability. `update --force` checks for a newer stable release first. Without asking, it stops a running service, verifies the release asset's SHA-256 digest, installs it, and starts the service, even if the service was stopped beforehand or the install failed. It checks that the installed CLI can reach the service after the starter exits. The Windows tray's **Update** action does the same for its running service but asks first. Saved sign-in and mappings are preserved. If you're already up to date, nothing is stopped, reinstalled, or started.
 
 Plain `update` never stops a running service. To control downtime yourself, run `devtunnelsvc service stop`, `devtunnelsvc update`, then `devtunnelsvc service start`. `service run` runs in the foreground for diagnostics. Linux requires a running systemd user manager for `install` and `start`. To keep the service running after the last login session ends, configure user lingering according to your system policy.
 

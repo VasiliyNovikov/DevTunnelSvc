@@ -414,13 +414,13 @@ public sealed class HttpTests
             async Task<string?> Update() => tray ? await menu.RunAsync("1.0.0", CancellationToken.None)
                 : await updater.RunAsync("1.0.0", exe, false, Lease, CancellationToken.None);
             if (validDigest)
-                Assert.AreEqual(initiallyRunning ? "Installed v2.0.0 and restarted DevTunnelSvc. Start your port mappings again."
+                Assert.AreEqual(initiallyRunning ? "Installed v2.0.0 and restarted DevTunnelSvc."
                     : "Installed v2.0.0 and started DevTunnelSvc.", await Update());
             else
             {
                 var failure = (await Assert.ThrowsExactlyAsync<InvalidOperationException>(Update)).Message;
                 Assert.Contains("SHA-256", failure);
-                Assert.EndsWith(initiallyRunning ? "The service was restarted. Start your port mappings again." : "The service was started.", failure);
+                Assert.EndsWith(initiallyRunning ? "The service was restarted." : "The service was started.", failure);
             }
             Assert.AreEqual(1, checks);
             Assert.AreEqual(tray ? 1 : 0, confirms, "Only the tray asks; update --force runs unattended.");

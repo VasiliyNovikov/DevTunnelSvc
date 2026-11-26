@@ -1,9 +1,7 @@
 using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
-using DevTunnelSvc.Auth;
 using DevTunnelSvc.Service;
-using DevTunnelSvc.Tunnels;
 using Microsoft.Win32;
 
 namespace DevTunnelSvc.Platform;
@@ -24,13 +22,7 @@ internal static class ServiceLifetime
         using var term = OperatingSystem.IsLinux() ? PosixSignalRegistration.Create(PosixSignal.SIGTERM,
             signal => { signal.Cancel = true; lifetime.Cancel(); }) : null;
         using var tray = new TrayLifetime(name, createTray);
-        using var http = GitHubOAuth.CreateClient();
-        http.Timeout = TimeSpan.FromSeconds(20);
-        using var credential = new SessionCredential(new CredentialFile(stateDirectory),
-            (token, tokenCt) => GitHubOAuth.RefreshAsync(http, token, tokenCt), TimeProvider.System);
-        await using var backend = new TunnelBackend(() => credential.RequireTokenAsync(lifetime.Token));
-        await using var service = new TunnelService(backend, credential);
-        await tray.WaitAsync(ControlServer.RunAsync(name, service, log, lifetime.Token), lifetime);
+        await tray.WaitAsync(ControlServer.RunAsync(name, stateDirectory, log, lifetime.Token), lifetime);
     }
 
     public static Task<string> StartAsync(CancellationToken ct) => StartAsync(OperatingSystem.IsWindows(),
@@ -62,7 +54,8 @@ internal static class ServiceLifetime
     {
         if (windowsExe is null)
             return systemctl(["start", Unit], ct);
-        start(new ProcessStartInfo(windowsExe, ["service", "run"]) { UseShellExecute = true, WindowStyle = ProcessWindowStyle.Hidden });
+        // The tray owns a message pump in this user's desktop session, not a console in the starter's lifetime.
+        start(new ProcessStartInfo(windowsExe, ["service", "run"]) { CreateNoWindow = true });
         return Task.CompletedTask;
     }
 
@@ -125,7 +118,8 @@ internal static class ServiceLifetime
 
     internal static async Task<int> ExitCodeAsync(ProcessStartInfo info, CancellationToken ct)
     {
-        using var process = Process.Start(info)!;
+        using var process = Process.Start(info) ?? throw new InvalidOperationException($"Could not start {info.FileName}.");
+        if (info.RedirectStandardOutput) await process.StandardOutput.BaseStream.CopyToAsync(Stream.Null, ct);
         await process.WaitForExitAsync(ct);
         return process.ExitCode;
     }

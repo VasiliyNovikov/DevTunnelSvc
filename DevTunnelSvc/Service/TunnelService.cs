@@ -4,9 +4,22 @@ using DevTunnelSvc.Tunnels;
 
 namespace DevTunnelSvc.Service;
 
-internal sealed class TunnelService(ITunnelBackend backend, SessionCredential credential) : IAsyncDisposable
+internal sealed class TunnelService : IAsyncDisposable
 {
-    private readonly Dictionary<string, (Mapping Map, ILiveTunnel Relay)> sessions = new(StringComparer.Ordinal);
+    private readonly ITunnelBackend backend;
+    private readonly SessionCredential credential;
+    private readonly MappingFile mappings;
+    private readonly Dictionary<string, MappingSession> sessions = new(StringComparer.Ordinal);
+    private IEnumerable<Mapping> SavedMappings => sessions.Values.Where(s => s.Saved).Select(s => s.Map);
+
+    internal TunnelService(ITunnelBackend backend, SessionCredential credential, MappingFile mappings)
+    {
+        this.backend = backend;
+        this.credential = credential;
+        this.mappings = mappings;
+        foreach (var map in mappings.Read())
+            sessions.Add(map.Name, new(map, ct => Authenticated().OpenAsync(map, ct), Task.Delay));
+    }
 
     // The local control server serializes commands; SDK sessions continue independently.
     public Task<string> ExecuteAsync(Request request, CancellationToken ct)
@@ -26,7 +39,7 @@ internal sealed class TunnelService(ITunnelBackend backend, SessionCredential cr
             "regions" => RegionsAsync(ct),
             "delete" => DeleteAsync(TunnelKey.Parse(request.Tunnel), ct),
             "host" or "connect" => OpenAsync(Mapping.Create(request.Command == "host", request.Tunnel, request.TunnelPort, request.LocalPort), ct),
-            "stop" => StopAsync(request.Tunnel),
+            "stop" or "disconnect" => StopAsync(request.Tunnel, clientOnly: request.Command == "disconnect"),
             "shutdown" => EndSessionAsync(logout: false),
             "shutdown-for-update" => request.ServicePid == Environment.ProcessId ? EndSessionAsync(logout: false)
                 : throw new InvalidOperationException("The selected service instance has changed. Check for updates again."),
@@ -44,12 +57,15 @@ internal sealed class TunnelService(ITunnelBackend backend, SessionCredential cr
     {
         if (sessions.Count != 0)
             throw new InvalidOperationException("Stop active mappings before changing accounts.");
-        await credential.ReplaceAsync(signIn ?? throw new ArgumentException("Missing sign-in credential."), ct);
+        if (signIn is null) throw new ArgumentException("Missing sign-in credential.");
+        // A failed logout must not carry a previous account's saved routes into a new grant.
+        mappings.Save([]);
+        await credential.ReplaceAsync(signIn, ct);
         return "Signed in. Credential saved.";
     }
 
     private string Status() => string.Join(Environment.NewLine,
-        sessions.Values.Select(s => $"{s.Map.Name}  {s.Relay.State}  {s.Map.Route}")
+        sessions.Values.Select(s => $"{s.Map.Name}  {s.State}  {s.Map.Route}")
             .Prepend(credential.IsSignedIn ? "Service running; signed in." : "Service running; signed out."));
 
     private async Task<string> ListAsync(CancellationToken ct) => TunnelSummary.FormatTable(await Authenticated().ListAsync(ct));
@@ -61,17 +77,23 @@ internal sealed class TunnelService(ITunnelBackend backend, SessionCredential cr
         if (sessions.ContainsKey(map.Name))
             throw new InvalidOperationException($"Mapping {map.Name} already exists.");
         var relay = await Authenticated().OpenAsync(map, ct);
-        sessions.Add(map.Name, (map, relay));
+        try { mappings.Save(SavedMappings.Append(map)); }
+        catch { await relay.DisposeAsync(); throw; }
+        sessions.Add(map.Name, new(map, relay));
         return $"{map.Name}  {map.Route}";
     }
 
-    private async Task<string> StopAsync(string? name)
+    private async Task<string> StopAsync(string? name, bool clientOnly)
     {
         if (name is null || !sessions.TryGetValue(name, out var item))
             throw new ArgumentException("Mapping not found. Use 'status' to see mapping names.");
-        await item.Relay.DisposeAsync();
+        if (clientOnly && item.Map.Host)
+            throw new ArgumentException("This is a hosted mapping. Use 'stop' to stop hosting it.");
+        mappings.Save(SavedMappings.Where(map => map.Name != name));
+        item.Saved = false;
+        await item.DisposeAsync();
         sessions.Remove(name);
-        return $"Stopped {name}.";
+        return clientOnly ? $"Disconnected {name}." : $"Stopped {name}.";
     }
 
     private async Task<string> DeleteAsync(TunnelKey key, CancellationToken ct)
@@ -84,13 +106,20 @@ internal sealed class TunnelService(ITunnelBackend backend, SessionCredential cr
     private async Task<string> EndSessionAsync(bool logout)
     {
         try { await DisposeAsync(); }
-        finally { if (logout) await credential.ReplaceAsync(null, CancellationToken.None); }
+        finally
+        {
+            if (logout)
+            {
+                try { mappings.Save([]); }
+                finally { await credential.ReplaceAsync(null, CancellationToken.None); }
+            }
+        }
         return logout ? "Signed out. Saved credential removed." : "Service stopping.";
     }
 
     public async ValueTask DisposeAsync()
     {
-        try { await Task.WhenAll(sessions.Values.Select(s => s.Relay.DisposeAsync().AsTask())); }
+        try { await Task.WhenAll(sessions.Values.Select(s => s.DisposeAsync().AsTask())); }
         finally { sessions.Clear(); }
     }
 }

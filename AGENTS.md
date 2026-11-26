@@ -12,6 +12,8 @@ On Windows, run the background process as the signed-in user and show a tray ico
 
 Keep the client's local listen port, the tunnel port, and the host's local target port independently configurable. For example, a client listening on `localhost:5000` can forward through tunnel port `8080` to a host application listening on `localhost:3000`. Preserve those distinctions in CLI arguments and in the service's forwarding logic.
 
+Save successful host and client mappings in the service's per-user state directory, separately from credentials. Restore them independently on startup so an offline peer does not block the control pipe or another mapping. Shutdown and update preserve them; `stop` forgets either kind, `disconnect` forgets only a client mapping, and `logout` forgets all mappings and the saved grant.
+
 ## Publishing and self-update
 
 V1 publishes one untrimmed, self-contained **ReadyToRun single-file** executable per supported OS and architecture, including native runtime libraries. JIT is intentional: the official Dev Tunnels SDK uses reflection in JSON handling and SSH activation. Do not fork the SDK, suppress dependency warnings, or re-enable Native AOT without validating the complete data path. No separate .NET runtime installation is required.

@@ -19,7 +19,8 @@ internal sealed partial class ControlJson : JsonSerializerContext;
 
 internal static class Control
 {
-    internal const int ProtocolVersion = 2;
+    // Host and connect now create durable mappings, not just sessions for this service lifetime.
+    internal const int ProtocolVersion = 3;
     internal static readonly string PipeName = "DevTunnelSvc-" +
         Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(Environment.UserName)))[..20];
     internal const PipeOptions Options = PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly;

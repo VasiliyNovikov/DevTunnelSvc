@@ -12,6 +12,18 @@ namespace DevTunnelSvc.Tests;
 public sealed class TrayMenuTests
 {
     [TestMethod]
+    public async Task StatusProbeDiscardsAFullOutputPipeAndReturnsTheInstalledClisExitCode()
+    {
+        var probe = OperatingSystem.IsWindows()
+            ? new ProcessStartInfo("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", "[Console]::Write('x' * 262144); exit 7"])
+            : new ProcessStartInfo("/bin/sh", ["-c", "head -c 262144 /dev/zero; exit 7"]);
+        probe.RedirectStandardOutput = true;
+        probe.CreateNoWindow = true;
+        using var limit = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        Assert.AreEqual(7, await ServiceLifetime.ExitCodeAsync(probe, limit.Token));
+    }
+
+    [TestMethod]
     public void MenuDispatchesAboutAndExitButNotDismissal()
     {
         var stub = new PopupStub();
@@ -166,23 +178,28 @@ public sealed class TrayMenuTests
     }
 
     [TestMethod]
-    public async Task StartUsesTheInstalledCliAndPropagatesItsReadinessResult()
+    [DataRow(0, 0, "service start,status")]
+    [DataRow(17, 0, "service start,service start,status")]
+    [DataRow(0, 17, "service start,status,service start,status")]
+    public async Task StartVerifiesReadinessAfterTheInstalledHelperExits(int firstStart, int firstStatus, string expected)
     {
         const string installed = @"C:\Apps with spaces\devtunnelsvc.exe";
-        var result = 0;
+        List<string> commands = [];
         Task<int> Start(ProcessStartInfo info, CancellationToken ct)
         {
             Assert.AreEqual(installed, info.FileName);
-            Assert.AreEqual("service,start", string.Join(',', info.ArgumentList));
+            var command = string.Join(' ', info.ArgumentList);
+            var first = !commands.Contains(command);
+            commands.Add(command);
             Assert.IsTrue(info.CreateNoWindow);
             Assert.IsTrue(ct.CanBeCanceled);
-            return Task.FromResult(result);
+            return Task.FromResult(first ? (command == "status" ? firstStatus : firstStart) : 0);
         }
         await UpdateHandoff.StartInstalledAsync(installed, Start);
-        result = 17;
-        var failure = await Assert.ThrowsExactlyAsync<InvalidOperationException>(() => UpdateHandoff.StartInstalledAsync(installed, Start));
-        Assert.Contains("service start", failure.Message);
-        Assert.Contains("17", failure.Message);
+        Assert.AreEqual(expected, string.Join(',', commands));
+        var failure = await Assert.ThrowsExactlyAsync<InvalidOperationException>(() => UpdateHandoff.StartInstalledAsync(installed,
+            (info, _) => Task.FromResult(info.ArgumentList[0] == "status" ? 29 : 0)));
+        Assert.Contains("'status' command exited with code 29", failure.Message);
     }
 
     [TestMethod]
@@ -198,7 +215,7 @@ public sealed class TrayMenuTests
             Assert.Contains("v2.0.0", text);
             Assert.Contains("1.0.0", text);
             Assert.Contains("stop all active port mappings", text);
-            Assert.Contains("started again", text);
+            Assert.Contains("Saved mappings will reconnect", text);
             return false;
         }, _ => throw new AssertFailedException(), (_, _) => throw new AssertFailedException(), () => throw new AssertFailedException());
         var message = await update.RunAsync("1.0.0", CancellationToken.None);

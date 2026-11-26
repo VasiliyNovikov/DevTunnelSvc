@@ -7,7 +7,7 @@ namespace DevTunnelSvc.Updates;
 internal sealed record UpdateHandoff(Func<Request, CancellationToken, Task<string>> Send, Func<Task> Start)
 {
     internal static string Question(string current, string tag) =>
-        $"Install {tag} (currently {current})?\n\nThis will stop all active port mappings, install the update, and restart DevTunnelSvc. Mappings must be started again.";
+        $"Install {tag} (currently {current})?\n\nThis will stop all active port mappings, install the update, and restart DevTunnelSvc. Saved mappings will reconnect.";
 
     // `update --force` runs unattended: it stops a running service without asking and always leaves DevTunnelSvc running.
     internal async Task<string> ApplyAsync(string tag, Func<CancellationToken, Task> install, CancellationToken ct)
@@ -60,17 +60,26 @@ internal sealed record UpdateHandoff(Func<Request, CancellationToken, Task<strin
             var result = installError is null ? $"Installed {tag}." : $"Update failed: {installError.Message}";
             throw new InvalidOperationException($"{result}\nThe service could not start: {ex.Message}\nRun 'devtunnelsvc service start'.", ex);
         }
-        var (started, mappings) = wasRunning ? ("restarted", " Start your port mappings again.") : ("started", "");
+        var started = wasRunning ? "restarted" : "started";
         if (installError is not null)
-            throw new InvalidOperationException($"Update failed: {installError.Message}\nThe service was {started}.{mappings}", installError);
-        return $"Installed {tag} and {started} DevTunnelSvc.{mappings}";
+            throw new InvalidOperationException($"Update failed: {installError.Message}\nThe service was {started}.", installError);
+        return $"Installed {tag} and {started} DevTunnelSvc.";
     }
 
     internal static async Task StartInstalledAsync(string executable, Func<ProcessStartInfo, CancellationToken, Task<int>> run)
     {
         // The installed CLI may speak a newer pipe protocol than the updater.
         using var limit = new CancellationTokenSource(TimeSpan.FromMinutes(2));
-        var code = await run(new ProcessStartInfo(executable, ["service", "start"]) { CreateNoWindow = true }, limit.Token);
-        if (code != 0) throw new InvalidOperationException($"The installed 'service start' command exited with code {code}.");
+        async Task<(string Command, int Code)> StartAndProbeAsync()
+        {
+            var start = await run(new(executable, ["service", "start"]) { CreateNoWindow = true }, limit.Token);
+            if (start != 0) return ("service start", start);
+            // Probe after the short-lived starter exits, using the newly installed protocol.
+            var status = new ProcessStartInfo(executable, ["status"]) { CreateNoWindow = true, RedirectStandardOutput = true };
+            return ("status", await run(status, limit.Token));
+        }
+        var result = await StartAndProbeAsync();
+        if (result.Code != 0) result = await StartAndProbeAsync();
+        if (result.Code != 0) throw new InvalidOperationException($"The installed '{result.Command}' command exited with code {result.Code}.");
     }
 }

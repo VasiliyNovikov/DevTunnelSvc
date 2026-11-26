@@ -1,12 +1,11 @@
 using System.Security.Cryptography;
 using System.Text.Json;
+using DevTunnelSvc.Service;
 
 namespace DevTunnelSvc.Auth;
 
 internal sealed class CredentialFile(string stateDirectory)
 {
-    private const UnixFileMode OwnerFile = UnixFileMode.UserRead | UnixFileMode.UserWrite;
-    private const UnixFileMode OwnerDirectory = OwnerFile | UnixFileMode.UserExecute;
     private const int MaxSize = 64 * 1024;
     private readonly string directory = Path.Combine(stateDirectory, "auth");
     internal string FilePath => Path.Combine(directory, OperatingSystem.IsWindows() ? "github.dpapi" : "github.json");
@@ -14,11 +13,11 @@ internal sealed class CredentialFile(string stateDirectory)
     internal GitHubCredential? Read()
     {
         EnsureDirectory();
-        RejectLink(FilePath);
+        StateFile.RejectLink(FilePath);
         try
         {
             using var file = new FileStream(FilePath, FileMode.Open, FileAccess.Read, FileShare.Read | FileShare.Delete);
-            if (!OperatingSystem.IsWindows() && File.GetUnixFileMode(file.SafeFileHandle) != OwnerFile)
+            if (!OperatingSystem.IsWindows() && File.GetUnixFileMode(file.SafeFileHandle) != StateFile.OwnerFile)
                 throw new UnauthorizedAccessException("Saved credential file must have mode 0600. Fix its permissions or run 'logout'.");
             var length = file.Length;
             if (length is <= 0 or > MaxSize)
@@ -34,12 +33,13 @@ internal sealed class CredentialFile(string stateDirectory)
     {
         credential.Validate();
         EnsureDirectory();
-        RejectLink(FilePath);
+        StateFile.RejectLink(FilePath);
         var json = JsonSerializer.SerializeToUtf8Bytes(credential, LoginJson.Default.GitHubCredential);
         try
         {
             var bytes = OperatingSystem.IsWindows() ? ProtectedData.Protect(json, null, DataProtectionScope.CurrentUser) : json;
-            WriteAtomically(bytes);
+            if (bytes.Length > MaxSize) throw new InvalidDataException("Credential exceeds the storage limit.");
+            StateFile.WriteAtomically(FilePath, bytes);
         }
         finally { CryptographicOperations.ZeroMemory(json); }
     }
@@ -71,49 +71,17 @@ internal sealed class CredentialFile(string stateDirectory)
         }
     }
 
-    private void WriteAtomically(byte[] bytes)
-    {
-        if (bytes.Length > MaxSize) throw new InvalidDataException("Credential exceeds the storage limit.");
-        // The per-user service lease and credential lock serialize writers. A fixed staging name
-        // lets the next save or logout remove an incomplete write left by an interrupted service.
-        var temp = FilePath + ".pending";
-        File.Delete(temp);
-        var options = new FileStreamOptions { Mode = FileMode.CreateNew, Access = FileAccess.Write, Share = FileShare.None };
-        if (!OperatingSystem.IsWindows()) options.UnixCreateMode = OwnerFile;
-        var file = new FileStream(temp, options);
-        try
-        {
-            using (file)
-            {
-                if (!OperatingSystem.IsWindows()) File.SetUnixFileMode(file.SafeFileHandle, OwnerFile);
-                file.Write(bytes);
-                file.Flush(flushToDisk: true);
-            }
-            File.Move(temp, FilePath, overwrite: true);
-        }
-        finally { File.Delete(temp); }
-    }
-
     private void EnsureDirectory()
     {
-        RejectLink(stateDirectory);
-        RejectLink(directory);
+        StateFile.EnsureDirectory(stateDirectory);
+        StateFile.RejectLink(directory);
         if (OperatingSystem.IsWindows())
         {
             Directory.CreateDirectory(directory);
             return;
         }
-        Directory.CreateDirectory(stateDirectory, OwnerDirectory);
-        if ((File.GetUnixFileMode(stateDirectory) & (UnixFileMode.GroupWrite | UnixFileMode.OtherWrite)) != 0)
-            throw new UnauthorizedAccessException($"Remove group/other write permission from the DevTunnelSvc state directory: {stateDirectory}");
-        Directory.CreateDirectory(directory, OwnerDirectory);
-        if (File.GetUnixFileMode(directory) != OwnerDirectory)
+        Directory.CreateDirectory(directory, StateFile.OwnerDirectory);
+        if (File.GetUnixFileMode(directory) != StateFile.OwnerDirectory)
             throw new UnauthorizedAccessException("The DevTunnelSvc auth directory must have mode 0700.");
-    }
-
-    private static void RejectLink(string path)
-    {
-        if (new FileInfo(path).LinkTarget is not null)
-            throw new IOException("Refusing to follow a link in the DevTunnelSvc credential store.");
     }
 }
