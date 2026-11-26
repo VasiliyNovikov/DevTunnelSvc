@@ -23,6 +23,8 @@
     <File Path="eng/release.cs" />
     <File Path="eng/test-install.ps1" />
     <File Path="eng/test-install.sh" />
+    <File Path="eng/test-update.ps1" />
+    <File Path="eng/update-smoke.cs" />
   </Folder>
   <Project Path="DevTunnelSvc/DevTunnelSvc.csproj" />
   <Project Path="DevTunnelSvc.Tests/DevTunnelSvc.Tests.csproj" />

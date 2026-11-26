@@ -1,3 +1,10 @@
+#:project ..\DevTunnelSvc\DevTunnelSvc.csproj AdditionalProperties="GenerateRuntimeConfigurationFiles=false"
+#:property AssemblyName=DevTunnelSvc.UpdateSmoke
+#:property PublishAot=false
+#:property PublishSingleFile=true
+#:property PublishReadyToRun=true
+#:property IncludeNativeLibrariesForSelfExtract=true
+
 using System.Diagnostics;
 using System.Text;
 using DevTunnelSvc;

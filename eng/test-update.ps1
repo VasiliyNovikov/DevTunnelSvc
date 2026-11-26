@@ -3,7 +3,7 @@ $ErrorActionPreference = 'Stop'
 if (!$IsWindows) { throw 'This smoke test exercises a published Windows updater.' }
 $rid = 'win-' + [Runtime.InteropServices.RuntimeInformation]::ProcessArchitecture.ToString().ToLowerInvariant()
 $work = [IO.Directory]::CreateTempSubdirectory('devtunnel-update-smoke-')
-$project = Join-Path $PSScriptRoot 'UpdateSmoke\DevTunnelSvc.UpdateSmoke.csproj'
+$fixture = Join-Path $PSScriptRoot 'update-smoke.cs'
 
 function Invoke-Cli([string] $Image, [string] $State, [string[]] $Arguments, [int[]] $Expected = @(0)) {
     $info = [Diagnostics.ProcessStartInfo]::new($Image)
@@ -82,7 +82,9 @@ function Test-Update([string] $Case, [string] $Old, [string] $New, [string] $Arc
 try {
     foreach ($major in 1, 2) {
         $dir = $work.CreateSubdirectory("v$major").FullName
-        dotnet publish $project -c Release -r $rid --self-contained true "-p:Version=$major.0.0" "-p:UpdateSmokePayload=$($major -eq 2)" -o $dir --verbosity quiet
+        # Embed symbols only in the replacement so the bundles differ in layout, not just version.
+        $debugType = if ($major -eq 2) { 'embedded' } else { 'portable' }
+        dotnet publish $fixture -c Release -r $rid --self-contained true "-p:Version=$major.0.0" "-p:DebugType=$debugType" -o $dir --verbosity quiet
         if ($LASTEXITCODE -ne 0) { throw "Could not publish fixture v$major." }
     }
     $old = Join-Path $work.FullName 'v1\DevTunnelSvc.UpdateSmoke.exe'
