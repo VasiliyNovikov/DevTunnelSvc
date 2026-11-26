@@ -69,7 +69,7 @@ internal sealed unsafe partial class TrayIcon : IDisposable
 
     [SupportedOSPlatform("windows")]
     internal static WindowsWindow OpenWindowsWindow(TrayMenu menu) => CreateOwnerWindow(RegisterWindowMessageW("TaskbarCreated"),
-        LoadArtwork, () => CreateWindowExW(0, "STATIC", "DevTunnelSvc", 0, 0, 0, 0, 0, 0, 0, 0, 0),
+        () => LoadArtwork(GetSystemMetrics(49)), () => CreateWindowExW(0, "STATIC", "DevTunnelSvc", 0, 0, 0, 0, 0, 0, 0, 0, 0), // SM_CXSMICON
         AttachProcedure, new(Shell_NotifyIconW, GetMessageW, DispatchMessageW, SendNotifyMessageW, Quit, DestroyWindow, DestroyIcon),
         menu);
 
@@ -103,15 +103,16 @@ internal sealed unsafe partial class TrayIcon : IDisposable
 
     [SupportedOSPlatform("windows")]
     [System.Diagnostics.CodeAnalysis.UnconditionalSuppressMessage("SingleFile", "IL3000", Justification = "Use the bundled executable's icon when the managed module has no file path.")]
-    private static nint LoadArtwork()
-        => ExtractArtwork(typeof(TrayIcon).Assembly.Location, ServiceLifetime.ApplicationExecutable, ExtractIconExW);
+    internal static nint LoadArtwork(int pixels)
+        => ExtractArtwork(typeof(TrayIcon).Assembly.Location, ServiceLifetime.ApplicationExecutable, pixels, SHDefExtractIconW);
 
-    internal delegate uint Extract(string path, int index, nint large, out nint small, uint count);
-    internal static nint ExtractArtwork(string module, Func<string> bundlePath, Extract extract)
+    internal delegate int Extract(string path, int index, uint flags, out nint icon, nint small, uint sizes);
+    internal static nint ExtractArtwork(string module, Func<string> bundlePath, int pixels, Extract extract)
     {
         var path = module.Length == 0 ? bundlePath() : module;
-        return extract(path, 0, 0, out var small, 1) == 1 && small != 0 ? small
-            : throw new InvalidOperationException("Could not load the embedded DevTunnelSvc icon.");
+        var result = extract(path, 0, 0, out var icon, 0, checked((ushort)pixels));
+        return result == 0 && icon != 0 ? icon
+            : throw new InvalidOperationException($"Could not load the embedded DevTunnelSvc icon (HRESULT 0x{result:X8}).");
     }
 
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvStdcall)])]
@@ -249,8 +250,9 @@ internal sealed unsafe partial class TrayIcon : IDisposable
     [LibraryImport("user32", StringMarshalling = StringMarshalling.Utf16, SetLastError = true)]
     private static partial nint CreateWindowExW(uint ex, string cls, string name, uint style, int x, int y, int w, int h, nint parent, nint menu, nint instance, nint args);
     [LibraryImport("shell32", StringMarshalling = StringMarshalling.Utf16)]
-    private static partial uint ExtractIconExW(string path, int index, nint largeIcons, out nint smallIcon, uint count);
-    [LibraryImport("user32")][return: MarshalAs(UnmanagedType.Bool)] private static partial bool DestroyIcon(nint icon);
+    private static partial int SHDefExtractIconW(string path, int index, uint flags, out nint icon, nint small, uint sizes);
+    [LibraryImport("user32")] private static partial int GetSystemMetrics(int metric);
+    [LibraryImport("user32")][return: MarshalAs(UnmanagedType.Bool)] internal static partial bool DestroyIcon(nint icon);
     [LibraryImport("shell32")][return: MarshalAs(UnmanagedType.Bool)] private static partial bool Shell_NotifyIconW(uint action, ref IconData data);
     [LibraryImport("user32", StringMarshalling = StringMarshalling.Utf16, SetLastError = true)] private static partial uint RegisterWindowMessageW(string message);
     [LibraryImport("user32", SetLastError = true)] private static partial int GetMessageW(out Message message, nint window, uint first, uint last);

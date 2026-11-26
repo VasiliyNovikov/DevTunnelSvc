@@ -49,6 +49,13 @@ internal sealed partial class WindowsTheme(bool supportsMenuTheme, Func<bool> hi
         if (hr < 0) warn($"Cannot theme the tray dialog title bar (HRESULT 0x{hr:X8}).");
     }
 
+    internal static void ApplyScrollbar(int build, bool dark, Func<string?, int> set, Action<string> warn)
+    {
+        if (build < 18362) return;
+        var hr = set(dark ? "DarkMode_Explorer" : null); // Restore the system theme for light and high contrast.
+        if (hr < 0) warn($"Cannot theme the status scrollbar (HRESULT 0x{hr:X8}).");
+    }
+
     private static void SetMenuMode(int mode)
     {
         RefreshImmersiveColorPolicyState();

@@ -1,5 +1,6 @@
 using System.ComponentModel;
 using System.Runtime.InteropServices;
+using System.Runtime.Versioning;
 using System.Text;
 using DevTunnelSvc.Platform;
 
@@ -108,6 +109,33 @@ public sealed class WindowsAppearanceTests
     }
 
     [TestMethod]
+    [DataRow(2, false)]
+    [DataRow(3, false)]
+    [DataRow(4, true)]
+    public void StatusUsesAllAvailableWidthBeforeDecidingWhetherToShowTheScrollbar(int lines, bool overflow)
+    {
+        var visible = true;
+        TrayDialog.FitScrollbar(3, () => { Assert.IsFalse(visible, "Measure wrapping without a scrollbar."); return lines; }, show => visible = show);
+        Assert.AreEqual(overflow, visible);
+    }
+
+    [TestMethod]
+    public void ScrollbarUsesTheDarkThemeOnlyWhenSupportedAndRestoresSystemAppearance()
+    {
+        List<string?> classes = [];
+        List<string> warnings = [];
+        int Apply(string? theme) { classes.Add(theme); return theme is null ? 0 : unchecked((int)0x80070057); }
+        WindowsTheme.ApplyScrollbar(18361, true, Apply, warnings.Add);
+        Assert.IsEmpty(classes);
+        WindowsTheme.ApplyScrollbar(18362, true, Apply, warnings.Add);
+        WindowsTheme.ApplyScrollbar(19041, false, Apply, warnings.Add);
+        Assert.HasCount(2, classes);
+        Assert.AreEqual("DarkMode_Explorer", classes[0]);
+        Assert.IsNull(classes[1]);
+        Assert.Contains("80070057", warnings.Single());
+    }
+
+    [TestMethod]
     public void TrayDialogRefreshesAndReturnsPaintingToWindowsInLightMode()
     {
         var dark = false;
@@ -203,7 +231,7 @@ public sealed class WindowsAppearanceTests
         Assert.IsGreaterThan((ushort)0, r.ReadUInt16());
         Assert.AreEqual("Segoe UI", Text());
         var body = scrollable ? (101, 0x81, 0x210844u, message) : (101, 0x82, 0x80u, message);
-        foreach (var (id, atom, style, text) in new[] { (100, 0x82, 0x43u, ""), body, (1, 0x80, 0x10001u, "OK") })
+        foreach (var (id, atom, style, text) in new[] { (100, 0x82, 0x243u, ""), body, (1, 0x80, 0x10001u, "OK") })
         {
             buffer.Position = (buffer.Position + 3) & ~3L;
             Assert.AreEqual(0x50000000u | style, r.ReadUInt32());
@@ -223,33 +251,40 @@ public sealed class WindowsAppearanceTests
     }
 
     [TestMethod]
-    [DataRow(false)]
-    [DataRow(true)]
-    public void WindowsCanThemeTheNativeTrayDialogsWithoutShowingThem(bool status)
+    [DataRow(false, false)]
+    [DataRow(true, false)]
+    [DataRow(true, true)]
+    public void WindowsCanThemeTheNativeTrayDialogsWithoutShowingThem(bool status, bool overflow)
     {
-        if (!OperatingSystem.IsWindows()) return;
-        var content = status ? new TrayDialogContent("DevTunnelSvc Status", string.Join("\r\n", Enumerable.Range(1, 80).Select(n => $"Mapping {n}")), true)
+        if (OperatingSystem.IsWindows()) CheckNativeDialog(status, overflow);
+    }
+
+    [SupportedOSPlatform("windows")]
+    private static void CheckNativeDialog(bool status, bool overflow)
+    {
+        var report = "Service running; signed in.\r\n" + string.Join(" ", Enumerable.Range(1, overflow ? 150 : 3).Select(n => $"Example mapping {n}"));
+        var content = status ? new TrayDialogContent("DevTunnelSvc Status", report, true)
             : new TrayDialogContent("About DevTunnelSvc", "DevTunnelSvc 1.2.3\r\n\r\nHosts & forwards");
         var dark = true;
         var brush = GetStockObject(4); // Borrow a real black brush for this hidden window.
-        var dialog = TrayDialog.Create(0, brush, () => dark);
+        var titleIcon = TrayIcon.LoadArtwork(16);
+        nint artwork = 0;
+        var pixels = 0;
+        var dialog = TrayDialog.Create(titleIcon, brush, () => dark, status, size => { pixels = size; return artwork = TrayIcon.LoadArtwork(size); });
         DialogProc procedure = dialog.Handle;
         var hwnd = CreateDialogIndirectParamW(0, TrayDialogTemplate.Build(content), 0, procedure, 0);
-        Assert.AreNotEqual((nint)0, hwnd, $"CreateDialogIndirectParamW failed: {Marshal.GetLastPInvokeError()}");
         try
         {
-            Assert.AreNotEqual((nint)0, GetDlgItem(hwnd, TrayDialogTemplate.IconId));
-            var text = new char[content.Text.Length + 1];
-            Assert.AreEqual((uint)content.Text.Length, GetDlgItemTextW(hwnd, 101, text, text.Length));
-            Assert.AreEqual(content.Text, new string(text, 0, content.Text.Length));
-            if (status)
-            {
-                var body = GetDlgItem(hwnd, 101);
-                _ = SendMessageW(body, 0x00B6, 0, 79); // EM_LINESCROLL
-                Assert.IsTrue(SendMessageW(body, 0x00CE, 0, 0) > 0); // EM_GETFIRSTVISIBLELINE
-            }
-            Assert.AreEqual(2u, GetDlgItemTextW(hwnd, 1, text, text.Length));
-            Assert.AreEqual("OK", new string(text, 0, 2));
+            Assert.AreNotEqual((nint)0, hwnd, $"CreateDialogIndirectParamW failed: {Marshal.GetLastPInvokeError()}");
+            dialog.CheckResult(1, 0);
+            var iconControl = GetDlgItem(hwnd, TrayDialogTemplate.IconId);
+            Assert.IsTrue(GetClientRect(iconControl, out var rect));
+            Assert.AreEqual(Math.Min(rect.Right, rect.Bottom), pixels);
+            Assert.IsGreaterThan(16, pixels);
+            Assert.AreEqual(titleIcon, SendMessageW(hwnd, 0x007F, 0, 0)); // WM_GETICON / ICON_SMALL
+            Assert.AreNotEqual(titleIcon, artwork);
+            Assert.AreEqual(artwork, SendMessageW(iconControl, 0x0171, 0, 0)); // STM_GETICON
+            CheckDialogText(hwnd, content, overflow);
             var button = GetDlgItem(hwnd, 1);
             Assert.AreEqual(0xB, GetWindowLongW(button, -16) & 0xF);
             var dc = GetDC(hwnd);
@@ -264,13 +299,34 @@ public sealed class WindowsAppearanceTests
             _ = SendMessageW(hwnd, 0x001A, 0, 0);
             Assert.AreEqual(1, GetWindowLongW(button, -16) & 0xF);
         }
-        finally { Assert.IsTrue(DestroyWindow(hwnd)); GC.KeepAlive(procedure); }
+        finally
+        {
+            if (hwnd != 0) Assert.IsTrue(DestroyWindow(hwnd));
+            if (artwork != 0) Assert.IsTrue(TrayIcon.DestroyIcon(artwork));
+            Assert.IsTrue(TrayIcon.DestroyIcon(titleIcon));
+            GC.KeepAlive(procedure);
+        }
+    }
+
+    private static void CheckDialogText(nint hwnd, TrayDialogContent content, bool overflow)
+    {
+        var text = new char[content.Text.Length + 1];
+        Assert.AreEqual((uint)content.Text.Length, GetDlgItemTextW(hwnd, TrayDialogTemplate.TextId, text, text.Length));
+        Assert.AreEqual(content.Text, new string(text, 0, content.Text.Length));
+        Assert.AreEqual(2u, GetDlgItemTextW(hwnd, 1, text, text.Length));
+        Assert.AreEqual("OK", new string(text, 0, 2));
+        var body = GetDlgItem(hwnd, TrayDialogTemplate.TextId);
+        Assert.AreEqual(overflow, (GetWindowLongW(body, -16) & 0x200000) != 0); // WS_VSCROLL
+        if (!overflow) return;
+        _ = SendMessageW(body, 0x00B6, 0, 79); // EM_LINESCROLL
+        Assert.IsTrue(SendMessageW(body, 0x00CE, 0, 0) > 0); // EM_GETFIRSTVISIBLELINE
     }
 
     private delegate nint DialogProc(nint hwnd, uint message, nuint w, nint l);
     [DllImport("user32", ExactSpelling = true, SetLastError = true)]
     private static extern nint CreateDialogIndirectParamW(nint instance, byte[] template, nint owner, DialogProc procedure, nint data);
     [DllImport("user32", ExactSpelling = true)] private static extern nint GetDlgItem(nint hwnd, int id);
+    [DllImport("user32", ExactSpelling = true)][return: MarshalAs(UnmanagedType.Bool)] private static extern bool GetClientRect(nint hwnd, out TrayMenu.Rect rect);
     [DllImport("user32", ExactSpelling = true, CharSet = CharSet.Unicode)] private static extern uint GetDlgItemTextW(nint hwnd, int id, [Out] char[] text, int length);
     [DllImport("user32", ExactSpelling = true)][return: MarshalAs(UnmanagedType.Bool)] private static extern bool DestroyWindow(nint hwnd);
     [DllImport("user32", ExactSpelling = true)] private static extern nint SendMessageW(nint hwnd, uint msg, nint w, nint l);

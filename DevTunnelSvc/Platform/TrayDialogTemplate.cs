@@ -7,6 +7,7 @@ internal sealed record TrayDialogContent(string Title, string Text, bool Scrolla
 internal static class TrayDialogTemplate
 {
     internal const ushort IconId = 100;
+    internal const ushort TextId = 101;
 
     // DLGTEMPLATE uses dialog units (not pixels) and DWORD-aligned DLGITEMTEMPLATE headers.
     internal static byte[] Build(TrayDialogContent content)
@@ -23,12 +24,12 @@ internal static class TrayDialogTemplate
         writer.Write((ushort)9);
         String(writer, "Segoe UI");
 
-        Control(writer, IconId, 0x82, 0x43, (12, 12, 25, 25), ""); // static icon
+        Control(writer, IconId, 0x82, 0x243, (12, 12, 25, 25), ""); // SS_ICON | SS_REALSIZECONTROL | SS_CENTERIMAGE: never stretch
         var textBounds = (47, 12, width - 59, height - 43);
         if (content.Scrollable)
-            Control(writer, 101, 0x81, 0x210844, textBounds, content.Text); // read-only multiline edit, vertical scroll, tab stop
+            Control(writer, TextId, 0x81, 0x210844, textBounds, content.Text); // read-only multiline edit, vertical scroll, tab stop
         else
-            Control(writer, 101, 0x82, 0x80, textBounds, content.Text); // SS_NOPREFIX: literal text
+            Control(writer, TextId, 0x82, 0x80, textBounds, content.Text); // SS_NOPREFIX: literal text
         Control(writer, 1, 0x80, 0x10001, (width - 62, height - 25, 50, 14), "OK");
         return buffer.ToArray();
     }

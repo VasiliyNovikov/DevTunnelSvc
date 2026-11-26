@@ -210,29 +210,30 @@ public sealed class PlatformTests
     }
 
     [TestMethod]
-    [DataRow("")]
-    [DataRow("devtunnelsvc.dll")]
-    public void TrayLoadsTheSmallIconFromTheBundleOrManagedModule(string module)
+    [DataRow("", 16)]
+    [DataRow("devtunnelsvc.dll", 48)]
+    public void TrayLoadsTheRequestedIconSizeFromTheBundleOrManagedModule(string module, int pixels)
     {
         var path = module.Length == 0 ? @"C:\A path\devtunnelsvc.exe" : module;
-        uint count = 1;
+        var result = 0;
         nint icon = 124;
-        uint Extract(string source, int index, nint large, out nint small, uint requested)
+        int Extract(string source, int index, uint flags, out nint image, nint small, uint sizes)
         {
             Assert.AreEqual(path, source);
             Assert.AreEqual(0, index);
-            Assert.AreEqual((nint)0, large);
-            Assert.AreEqual(1u, requested);
-            small = icon;
-            return count;
+            Assert.AreEqual(0u, flags);
+            Assert.AreEqual((nint)0, small);
+            Assert.AreEqual((uint)pixels, sizes);
+            image = icon;
+            return result;
         }
         string Bundle() => module.Length == 0 ? path : throw new AssertFailedException();
-        Assert.AreEqual(icon, TrayIcon.ExtractArtwork(module, Bundle, Extract));
-        count = 0;
-        Assert.Contains("embedded DevTunnelSvc icon", Assert.ThrowsExactly<InvalidOperationException>(() => TrayIcon.ExtractArtwork(module, Bundle, Extract)).Message);
-        count = 1;
+        Assert.AreEqual(icon, TrayIcon.ExtractArtwork(module, Bundle, pixels, Extract));
+        result = 1; // S_FALSE: the icon was not found.
+        Assert.Contains("embedded DevTunnelSvc icon", Assert.ThrowsExactly<InvalidOperationException>(() => TrayIcon.ExtractArtwork(module, Bundle, pixels, Extract)).Message);
+        result = 0;
         icon = 0;
-        Assert.ThrowsExactly<InvalidOperationException>(() => TrayIcon.ExtractArtwork(module, Bundle, Extract));
+        Assert.ThrowsExactly<InvalidOperationException>(() => TrayIcon.ExtractArtwork(module, Bundle, pixels, Extract));
     }
 
     [TestMethod]

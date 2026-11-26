@@ -7,31 +7,59 @@ namespace DevTunnelSvc.Platform;
 internal sealed unsafe partial class TrayDialog(TrayDialog.Surface surface)
 {
     private const uint Background = 0x202020, Foreground = 0xF5F5F5;
-    internal sealed record Surface(Func<bool> UseDark, Action<nint> SetIcon, Action<nint, bool> Apply,
+    internal sealed record Surface(Func<bool> UseDark, Action<nint> Initialize, Action<nint, bool> Apply,
         Func<nint, nint> PaintBackground, Action<nint> PaintButton, Action<nint, nint> End);
     private bool dark;
     private Exception? failure;
 
     [SupportedOSPlatform("windows")]
-    internal static void Show(nint owner, nint icon, TrayDialogContent content)
+    internal static void Show(nint owner, nint icon, TrayDialogContent content) =>
+        WithBrush(CreateSolidBrush, brush => Show(owner, icon, content, brush), DeleteObject);
+
+    [SupportedOSPlatform("windows")]
+    private static void Show(nint owner, nint icon, TrayDialogContent content, nint brush)
     {
-        WithBrush(CreateSolidBrush, brush =>
+        nint artwork = 0;
+        var dialog = Create(icon, brush, WindowsTheme.SystemTheme.UseDarkPalette, content.Scrollable, pixels => artwork = TrayIcon.LoadArtwork(pixels));
+        try
         {
-            var dialog = Create(icon, brush, WindowsTheme.SystemTheme.UseDarkPalette);
             fixed (byte* template = TrayDialogTemplate.Build(content))
             {
                 var result = DialogBoxIndirectParamW(GetModuleHandleW(null), template, owner, dialog.Handle, 0);
                 dialog.CheckResult(result, Marshal.GetLastPInvokeError());
             }
-        }, DeleteObject);
+        }
+        finally { if (artwork != 0) _ = TrayIcon.DestroyIcon(artwork); }
     }
 
     [SupportedOSPlatform("windows")]
-    internal static TrayDialog Create(nint icon, nint brush, Func<bool> useDark) => new(new(useDark, hwnd =>
+    internal static TrayDialog Create(nint titleIcon, nint brush, Func<bool> useDark, bool scrollable, Func<int, nint> loadArtwork) => new(new(useDark, hwnd =>
     {
-        _ = SendMessageW(hwnd, 0x0080, 0, icon); // WM_SETICON / ICON_SMALL
-        _ = SendDlgItemMessageW(hwnd, TrayDialogTemplate.IconId, 0x0170, (nuint)icon, 0); // STM_SETICON
-    }, ApplyTheme, dc => DarkBackground(dc, brush), DrawOk, (hwnd, result) => EndDialog(hwnd, result)));
+        _ = SendMessageW(hwnd, 0x0080, 0, titleIcon); // WM_SETICON / ICON_SMALL
+        var control = GetDlgItem(hwnd, TrayDialogTemplate.IconId);
+        if (!GetClientRect(control, out var rect)) throw new Win32Exception(Marshal.GetLastPInvokeError());
+        var artwork = loadArtwork(Math.Min(rect.Right, rect.Bottom));
+        _ = SendMessageW(control, 0x0170, (nuint)artwork, 0); // STM_SETICON
+        if (scrollable) FitScrollbar(GetDlgItem(hwnd, TrayDialogTemplate.TextId));
+    }, (hwnd, dark) => ApplyTheme(hwnd, dark, scrollable), dc => DarkBackground(dc, brush), DrawOk, (hwnd, result) => EndDialog(hwnd, result)));
+
+    private static void FitScrollbar(nint edit)
+    {
+        var scroll = new ScrollInfo { Size = (uint)sizeof(ScrollInfo), Mask = 2 }; // SIF_PAGE
+        if (!GetScrollInfo(edit, 1, ref scroll))
+        {
+            Console.Error.WriteLine($"Cannot measure status text; retaining the native scrollbar (Win32 {Marshal.GetLastPInvokeError()}).");
+            return;
+        }
+        FitScrollbar(scroll.Page, () => SendMessageW(edit, 0x00BA, 0, 0), show => ShowScrollBar(edit, 1, show)); // EM_GETLINECOUNT / SB_VERT
+    }
+
+    internal static void FitScrollbar(uint visibleLines, Func<nint> wrappedLines, Action<bool> show)
+    {
+        // Measure wrapped lines at the full width; the scrollbar itself can cause an extra line.
+        show(false);
+        if (wrappedLines() > visibleLines) show(true);
+    }
 
     internal static void WithBrush(Func<uint, nint> create, Action<nint> show, Func<nint, bool> delete)
     {
@@ -64,7 +92,7 @@ internal sealed unsafe partial class TrayDialog(TrayDialog.Surface surface)
         switch (message)
         {
             case 0x0110: // WM_INITDIALOG
-                surface.SetIcon(hwnd);
+                surface.Initialize(hwnd);
                 Refresh(hwnd);
                 return 1;
             case 0x0015 or 0x001A or 0x031A: // system colors, settings, visual styles
@@ -92,10 +120,13 @@ internal sealed unsafe partial class TrayDialog(TrayDialog.Surface surface)
         surface.Apply(hwnd, dark);
     }
 
-    private static void ApplyTheme(nint hwnd, bool dark)
+    private static void ApplyTheme(nint hwnd, bool dark, bool scrollable)
     {
-        WindowsTheme.ApplyTitleBar(Environment.OSVersion.Version.Build, dark,
+        var build = Environment.OSVersion.Version.Build;
+        WindowsTheme.ApplyTitleBar(build, dark,
             (attribute, enabled) => DwmSetWindowAttribute(hwnd, attribute, ref enabled, sizeof(int)), Console.Error.WriteLine);
+        if (scrollable)
+            WindowsTheme.ApplyScrollbar(build, dark, theme => SetWindowTheme(GetDlgItem(hwnd, TrayDialogTemplate.TextId), theme, null), Console.Error.WriteLine);
         // Let Windows draw the normal default button in light and high-contrast modes.
         _ = SendDlgItemMessageW(hwnd, 1, 0x00F4, dark ? 0xBu : 1u, 0); // BM_SETSTYLE: BS_OWNERDRAW / BS_DEFPUSHBUTTON
         _ = RedrawWindow(hwnd, 0, 0, 0x0085); // invalidate, erase, include children
@@ -138,6 +169,9 @@ internal sealed unsafe partial class TrayDialog(TrayDialog.Surface surface)
         ((state & 1) != 0 ? 0x505050u : 0x353535u, (state & 0x0210) == 0x0010); // ODS_SELECTED, ODS_FOCUS, ODS_NOFOCUSRECT
 
     [StructLayout(LayoutKind.Sequential)]
+    private struct ScrollInfo { public uint Size, Mask; public int Min, Max; public uint Page; public int Position, TrackPosition; }
+
+    [StructLayout(LayoutKind.Sequential)]
     private struct DrawItem
     {
         public uint Type, Id, Item, Action, State;
@@ -152,6 +186,11 @@ internal sealed unsafe partial class TrayDialog(TrayDialog.Surface surface)
     [LibraryImport("user32.dll")][return: MarshalAs(UnmanagedType.Bool)] private static partial bool EndDialog(nint hwnd, nint result);
     [LibraryImport("user32.dll")] private static partial nint SendMessageW(nint hwnd, uint message, nuint w, nint l);
     [LibraryImport("user32.dll")] private static partial nint SendDlgItemMessageW(nint hwnd, int id, uint message, nuint w, nint l);
+    [LibraryImport("user32.dll")] private static partial nint GetDlgItem(nint hwnd, int id);
+    [LibraryImport("user32.dll", SetLastError = true)][return: MarshalAs(UnmanagedType.Bool)] private static partial bool GetClientRect(nint hwnd, out TrayMenu.Rect rect);
+    [LibraryImport("user32.dll", SetLastError = true)][return: MarshalAs(UnmanagedType.Bool)] private static partial bool GetScrollInfo(nint hwnd, int bar, ref ScrollInfo info);
+    [LibraryImport("user32.dll")][return: MarshalAs(UnmanagedType.Bool)] private static partial bool ShowScrollBar(nint hwnd, int bar, [MarshalAs(UnmanagedType.Bool)] bool show);
+    [LibraryImport("uxtheme.dll", StringMarshalling = StringMarshalling.Utf16)] private static partial int SetWindowTheme(nint hwnd, string? app, string? classes);
     [LibraryImport("dwmapi.dll")] private static partial int DwmSetWindowAttribute(nint hwnd, uint field, ref int enabled, uint size);
     [LibraryImport("user32.dll")][return: MarshalAs(UnmanagedType.Bool)] private static partial bool RedrawWindow(nint hwnd, nint bounds, nint region, uint flags);
     [LibraryImport("gdi32.dll")] private static partial nint CreateSolidBrush(uint color);
