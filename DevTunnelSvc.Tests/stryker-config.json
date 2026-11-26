@@ -4,6 +4,6 @@
     "test-runner": "vstest",
     "reporters": ["progress", "html", "json"],
     "thresholds": { "high": 90, "low": 80, "break": 80 },
-    "concurrency": 2
+    "concurrency": 8
   }
 }
