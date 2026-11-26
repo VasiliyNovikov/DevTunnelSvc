@@ -42,18 +42,22 @@ function Test-Update([string] $Case, [string] $Old, [string] $New, [string] $Arc
         if ($Case -eq 'start-failure') { [IO.File]::WriteAllText((Join-Path $state 'reject-start'), '') }
         $exitCode = if ($Case -eq 'success') { 0 } else { 1 }
         $reply = Invoke-Cli $exe $state @('update', '--force') $exitCode
-        $log = Get-Content -Raw -LiteralPath (Join-Path $state 'update.log')
+        $log = Get-Content -Raw -LiteralPath (Join-Path $state 'app.log')
+        if ($log -notmatch "\[$before\] \[service\] Control pipe ready\." -or $log -notmatch '\[update\] Launching stable update worker\.') {
+            throw "Service and updater did not preserve their shared event history: $log"
+        }
         if ($log -notmatch "Stopping service PID $before\.") { throw "Wrong service stopped: $log" }
         $expectedImage = if ($Case -eq 'bad-digest') { $Old } else { $New }
         if ((Get-FileHash -LiteralPath $exe).Hash -ne (Get-FileHash -LiteralPath $expectedImage).Hash) { throw "Wrong image after $Case" }
         if ([IO.Directory]::GetDirectories($install).Length) { throw "Update helper left behind: $Case" }
         if ($Case -eq 'start-failure') {
-            if ($reply -notmatch 'exited with code 37' -or $reply -notmatch 'Update log:' -or $log -notmatch 'service start exit code: 37') {
+            if ($reply -notmatch 'exited with code 37' -or $reply -notmatch 'Application log:' -or $log -notmatch 'service start exit code: 37') {
                 throw "Restart failure lost: $reply; $log"
             }
         } else {
             $after = Invoke-Cli $exe $state @('smoke-pid')
             if ($after -eq $before -or (Invoke-Cli $exe $state @('status')) -notmatch 'Service running; signed out') { throw 'Service was not restarted.' }
+            if ($log -notmatch "\[$after\] \[service\] Control pipe ready\.") { throw "Restart missing from the application log: $log" }
             if ($log -notmatch 'status exit code: 0') { throw "Missing independent readiness result: $log" }
             if ($Case -eq 'bad-digest' -and $reply -notmatch 'SHA-256') { throw "Lost install failure: $reply" }
             if ($Case -eq 'success') {

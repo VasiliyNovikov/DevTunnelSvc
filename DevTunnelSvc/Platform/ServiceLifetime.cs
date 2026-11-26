@@ -15,14 +15,21 @@ internal static class ServiceLifetime
         RunAsync(log, Control.PipeName, InstanceLease.DefaultDirectory, ct, TrayLifetime.ForCurrentPlatform);
 
     internal static async Task RunAsync(TextWriter log, string name, string stateDirectory, CancellationToken ct,
-        Func<string, Action<Exception?>, IDisposable>? createTray = null)
+        TrayLifetime.Factory? createTray = null)
     {
-        using var instance = InstanceLease.Acquire(stateDirectory);
-        using var lifetime = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        using var term = OperatingSystem.IsLinux() ? PosixSignalRegistration.Create(PosixSignal.SIGTERM,
-            signal => { signal.Cancel = true; lifetime.Cancel(); }) : null;
-        using var tray = new TrayLifetime(name, createTray);
-        await tray.WaitAsync(ControlServer.RunAsync(name, stateDirectory, log, lifetime.Token), lifetime);
+        var events = new AppLog(stateDirectory, "service", log.WriteLine);
+        events.Write($"Starting DevTunnelSvc {Program.Version}.");
+        try
+        {
+            using var instance = InstanceLease.Acquire(stateDirectory);
+            using var lifetime = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            using var term = OperatingSystem.IsLinux() ? PosixSignalRegistration.Create(PosixSignal.SIGTERM,
+                signal => { signal.Cancel = true; lifetime.Cancel(); }) : null;
+            using var tray = new TrayLifetime(name, events.Write, createTray);
+            await tray.WaitAsync(ControlServer.RunAsync(name, stateDirectory, log, events.Write, lifetime.Token), lifetime);
+        }
+        catch (Exception ex) { events.Write($"Service failed: {AppLog.ErrorCode(ex)}"); throw; }
+        events.Write("Service stopped.");
     }
 
     public static Task<string> StartAsync(CancellationToken ct) => StartAsync(OperatingSystem.IsWindows(),

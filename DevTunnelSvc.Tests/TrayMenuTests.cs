@@ -43,6 +43,7 @@ public sealed class TrayMenuTests
         menu.Show(11, 12);
         Assert.AreEqual("exit", stub.Actions.Last());
         Assert.AreEqual(3, stub.Destroyed);
+        Assert.AreEqual("Tray menu: About.,Tray menu: Exit.", string.Join(',', stub.Events));
     }
 
     [TestMethod]
@@ -316,7 +317,7 @@ public sealed class TrayMenuTests
             },
         };
         var actions = new TrayMenu(popup, () => exits++, () => throw new AssertFailedException(),
-            new((_, text, _, _) => throw new AssertFailedException(text)), string.Empty, (_, _, _) => Assert.Fail());
+            new((_, text, _, _) => throw new AssertFailedException(text)), string.Empty, (_, _, _) => Assert.Fail(), _ => { });
         using var window = TrayIcon.OpenWindowsWindow(actions);
         owner = window.Handle;
         Assert.IsTrue(TrayIcon.PostMessageW(owner, TrayIcon.CallbackMessage, 0, (1 << 16) | 0x7B));
@@ -338,6 +339,7 @@ public sealed class TrayMenuTests
         public Action? WhileTracking { get; set; }
         public List<string> Labels { get; } = [];
         public List<string> Actions { get; } = [];
+        public List<string> Events { get; } = [];
         public List<string> Tracking { get; } = [];
         public int Destroyed { get; private set; }
         public uint UpdateFlags { get; private set; }
@@ -378,7 +380,7 @@ public sealed class TrayMenuTests
             Assert.AreEqual(((nint)11, (nint)12), (owner, icon));
             Assert.AreEqual(Select == TrayMenu.Command.Status, content.Scrollable);
             Actions.Add($"{content.Title}:{content.Text}");
-        });
+        }, Events.Add);
 
         private bool Add(nint m, uint flags, nuint id, string? text)
         {

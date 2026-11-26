@@ -17,6 +17,7 @@ internal sealed record TunnelKey(string Id, string Cluster)
 
 internal sealed record Mapping(bool Host, TunnelKey Tunnel, int TunnelPort, int LocalPort)
 {
+    internal string Role => Host ? "host" : "client";
     public string Name => Host ? $"host:{Tunnel}" : $"connect:{Tunnel}:{LocalPort}";
     public string Route => Host ? $"{Tunnel}:{TunnelPort} -> localhost:{LocalPort}" : $"localhost:{LocalPort} -> {Tunnel}:{TunnelPort}";
 

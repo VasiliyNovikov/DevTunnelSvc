@@ -9,7 +9,7 @@ using DevTunnelSvc.Service;
 namespace DevTunnelSvc.Platform;
 
 internal sealed partial class TrayMenu(TrayMenu.Popup popup, Action exit, Func<Process> launchUpdate, TrayMenu.Dialogs dialogs,
-    string pipeName, Action<nint, nint, TrayDialogContent> showDialog) : IDisposable
+    string pipeName, Action<nint, nint, TrayDialogContent> showDialog, Action<string> writeEvent) : IDisposable
 {
     internal const string UpdateWorker = "__tray-update";
     internal enum Command : uint { None, Status, Update, About, Exit }
@@ -21,7 +21,8 @@ internal sealed partial class TrayMenu(TrayMenu.Popup popup, Action exit, Func<P
     private bool showing;
 
     [SupportedOSPlatform("windows")]
-    internal static TrayMenu Create(Action exit, string pipeName) => new(SystemPopup, exit, LaunchUpdater, SystemDialogs, pipeName, TrayDialog.Show);
+    internal static TrayMenu Create(Action exit, string pipeName, Action<string> writeEvent) =>
+        new(SystemPopup, exit, LaunchUpdater, SystemDialogs, pipeName, TrayDialog.Show, writeEvent);
 
     [SupportedOSPlatform("windows")]
     internal static Popup SystemPopup => new(WindowsTheme.SystemTheme.PrepareMenu, CreatePopupMenu, AppendMenuW, IconAnchor, SetForegroundWindow,
@@ -34,7 +35,9 @@ internal sealed partial class TrayMenu(TrayMenu.Popup popup, Action exit, Func<P
         try
         {
             var busy = updater is { HasExited: false };
-            switch (Choose(owner, busy))
+            var selection = Choose(owner, busy);
+            if (selection != Command.None) writeEvent($"Tray menu: {selection}.");
+            switch (selection)
             {
                 case Command.Status:
                     showDialog(owner, icon, new("DevTunnelSvc Status", ReadStatus(), Scrollable: true));
@@ -54,6 +57,7 @@ internal sealed partial class TrayMenu(TrayMenu.Popup popup, Action exit, Func<P
         }
         catch (Exception ex) when (ex is Win32Exception or IOException or InvalidOperationException)
         {
+            writeEvent($"Tray menu failed: {AppLog.ErrorCode(ex)}");
             dialogs.ReportError(owner, ex.Message);
         }
         finally { showing = false; }

@@ -17,27 +17,34 @@ internal sealed class MappingSession : IAsyncDisposable
         opening = Task.FromResult(relay);
     }
 
-    internal MappingSession(Mapping map, Func<CancellationToken, Task<ILiveTunnel>> open, Func<TimeSpan, CancellationToken, Task> delay)
+    internal MappingSession(Mapping map, Func<CancellationToken, Task<ILiveTunnel>> open, Func<TimeSpan, CancellationToken, Task> delay, Action<string> writeEvent)
     {
         Map = map;
         restore = new();
-        opening = RestoreAsync(open, delay, restore.Token);
+        opening = RestoreAsync(open, delay, writeEvent, restore.Token);
     }
 
     private async Task<ILiveTunnel> RestoreAsync(Func<CancellationToken, Task<ILiveTunnel>> open,
-        Func<TimeSpan, CancellationToken, Task> delay, CancellationToken ct)
+        Func<TimeSpan, CancellationToken, Task> delay, Action<string> writeEvent, CancellationToken ct)
     {
         // An offline peer must not delay the control pipe, the tray, or another mapping.
         await Task.Yield();
+        writeEvent($"Restoring {Map.Role} mapping.");
         while (true)
         {
             ct.ThrowIfCancellationRequested();
             using var attempt = CancellationTokenSource.CreateLinkedTokenSource(ct);
             attempt.CancelAfter(TimeSpan.FromSeconds(50));
-            try { return await open(attempt.Token); }
+            try
+            {
+                var relay = await open(attempt.Token);
+                writeEvent($"Restored {Map.Role} mapping.");
+                return relay;
+            }
             catch (Exception ex)
             {
                 ct.ThrowIfCancellationRequested();
+                writeEvent($"Retrying {Map.Role} mapping: {AppLog.ErrorCode(ex)}");
                 var reason = ex is OperationCanceledException ? "connection timed out" : ControlServer.ErrorMessage(ex);
                 state = $"Retrying ({reason})";
             }

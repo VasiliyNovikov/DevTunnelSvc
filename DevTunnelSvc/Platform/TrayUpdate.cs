@@ -34,8 +34,8 @@ internal sealed class TrayUpdate(Func<CancellationToken, Task<ReleaseInfo?>> fin
             var message = await new ReleaseUpdate(http).CheckAsync(Program.Version, false, (release, t) =>
             {
                 Program.RequireSingleFileUpdate();
-                var log = new UpdateLog(InstanceLease.DefaultDirectory, Console.Error.WriteLine);
-                log.Begin(Program.Version, release.TagName);
+                var log = new AppLog(InstanceLease.DefaultDirectory, "update", Console.Error.WriteLine);
+                log.Write($"Updating {Program.Version} to {release.TagName}.");
                 return UpdateWorker.RunAsync(ServiceLifetime.ApplicationExecutable(), [TrayMenu.UpdateWorker, servicePid.ToString(CultureInfo.InvariantCulture)],
                     release.TagName, log, t);
             }, ct);
@@ -50,7 +50,7 @@ internal sealed class TrayUpdate(Func<CancellationToken, Task<ReleaseInfo?>> fin
         var image = ServiceLifetime.ApplicationExecutable();
         var installed = UpdateWorker.InstalledPath(image);
         var directory = InstanceLease.DefaultDirectory;
-        var log = new UpdateLog(directory, Console.Error.WriteLine);
+        var log = new AppLog(directory, "update", Console.Error.WriteLine);
         using var service = Process.GetProcessById(servicePid);
         _ = service.SafeHandle;
         using var http = GitHubOAuth.CreateClient();
@@ -62,14 +62,14 @@ internal sealed class TrayUpdate(Func<CancellationToken, Task<ReleaseInfo?>> fin
             return release;
         }, TrayMenu.SystemDialogs.Confirm, t =>
         {
-            log.Step($"Stopping service PID {servicePid}.");
+            log.Write($"Stopping service PID {servicePid}.");
             return UpdateHandoff.StopAsync(servicePid, (r, token) => Control.SendAsync(r, Control.PipeName, token), t);
         }, async (release, t) =>
         {
             await WaitForExitAsync(service.WaitForExitAsync);
             await updater.ApplyAsync(release, installed, () => UpdateWorker.AcquireLease(image, installed, directory), t);
-        }, () => UpdateHandoff.StartInstalledAsync(installed, ServiceLifetime.ExitCodeAsync, log.Step), log.Step);
-        return await log.TraceAsync(() => UpdateWorker.UntilParentClosesAsync(UpdateWorker.ParentClosed(), t => flow.RunAsync(Program.Version, t), ct));
+        }, () => UpdateHandoff.StartInstalledAsync(installed, ServiceLifetime.ExitCodeAsync, log.Write), log.Write);
+        return await log.TraceAsync("Worker", () => UpdateWorker.UntilParentClosesAsync(UpdateWorker.ParentClosed(), t => flow.RunAsync(Program.Version, t), ct));
     }
 
     internal static async Task<int> WithFeedbackAsync(Func<Task<string?>> update, TrayMenu.Dialogs dialogs)
@@ -82,7 +82,7 @@ internal sealed class TrayUpdate(Func<CancellationToken, Task<ReleaseInfo?>> fin
         }
         catch (Exception ex)
         {
-            dialogs.ReportError(0, UpdateLog.Detail(ex));
+            dialogs.ReportError(0, AppLog.Detail(ex));
             return 1;
         }
     }

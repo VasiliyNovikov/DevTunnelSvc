@@ -1,4 +1,3 @@
-using System.ComponentModel;
 using DevTunnelSvc.Platform;
 using DevTunnelSvc.Updates;
 
@@ -16,8 +15,7 @@ public sealed class UpdateWorkerTests
             var windows = OperatingSystem.IsWindows();
             var installed = Path.Combine(root.FullName, windows ? "cmd.exe" : "sh");
             File.Copy(windows ? Environment.GetEnvironmentVariable("ComSpec")! : "/bin/sh", installed);
-            var log = new UpdateLog(root.FullName, Assert.Fail);
-            log.Begin("1.0.0", "v2.0.0");
+            var log = new AppLog(root.FullName, "update", Assert.Fail);
             using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
             string[] echo = windows ? ["/d", "/c", "echo"] : ["-c", "printf '%s %s' \"$1\" \"$2\"", "worker"];
             Assert.AreEqual("--update-worker-tag v2.0.0", await UpdateWorker.RunAsync(installed, echo, "v2.0.0", log, timeout.Token));
@@ -89,14 +87,15 @@ public sealed class UpdateWorkerTests
             Assert.AreEqual(root.FullName, copy.Directory?.Parent?.FullName);
             Assert.AreEqual("fake-cli", copy.Name);
             Assert.IsFalse(copy.Exists);
-            var log = File.ReadAllText(Path.Combine(root.FullName, "update.log"));
+            var log = File.ReadAllText(Path.Combine(root.FullName, "app.log"));
             Assert.Contains("Updating 1.0.0 to v2.0.0", log);
             Assert.Contains("Launching stable update worker", log);
             Assert.Contains("Update worker completed", log);
             await File.WriteAllTextAsync(exe, "#!/bin/sh\nprintf 'worker detail' >&2\nexit 5\n");
             var error = await Assert.ThrowsExactlyAsync<InvalidOperationException>(() => update.RunAsync(new(false, force), CancellationToken.None));
-            Assert.Contains("worker detail\nUpdate log: ", error.Message);
-            var failedLog = File.ReadAllText(Path.Combine(root.FullName, "update.log"));
+            Assert.Contains("worker detail\nApplication log: ", error.Message);
+            var failedLog = File.ReadAllText(Path.Combine(root.FullName, "app.log"));
+            Assert.Contains("Update worker completed", failedLog);
             Assert.Contains("Update failed: InvalidOperationException", failedLog);
             Assert.DoesNotContain("worker detail", failedLog);
         }
@@ -134,7 +133,7 @@ public sealed class UpdateWorkerTests
         {
             using var cancel = new CancellationTokenSource();
             await cancel.CancelAsync();
-            var log = new UpdateLog(root.FullName, Assert.Fail);
+            var log = new AppLog(root.FullName, "update", Assert.Fail);
             await Assert.ThrowsAsync<OperationCanceledException>(() => UpdateWorker.RunAsync(Path.Combine(root.FullName, "absent"),
                 ["update"], "v2.0.0", log, cancel.Token));
             Assert.IsEmpty(root.GetFileSystemInfos());
@@ -157,15 +156,15 @@ public sealed class UpdateWorkerTests
         {
             List<string> warnings = [];
             var state = Path.Combine(root.FullName, "state");
-            var log = new UpdateLog(state, warnings.Add);
-            log.Begin("1.0.0", "v2.0.0");
+            var log = new AppLog(state, "update", warnings.Add);
+            log.Write("Updating 1.0.0 to v2.0.0.");
             Assert.IsTrue(File.Exists(log.FilePath));
             var original = Path.Combine(root.FullName, "unrelated");
             File.WriteAllText(original, "untouched");
             File.Delete(log.FilePath);
             File.CreateSymbolicLink(log.FilePath, original);
-            log.Step("must not be appended");
-            Assert.Contains("Cannot write update log", warnings.Single());
+            log.Write("must not be appended");
+            Assert.Contains("Cannot write application log", warnings.Single());
             var workerDir = root.CreateSubdirectory($".devtunnelsvc-update-{Guid.NewGuid():N}");
             var worker = Path.Combine(workerDir.FullName, "installed");
             var installed = Path.Combine(root.FullName, "installed");
@@ -178,39 +177,6 @@ public sealed class UpdateWorkerTests
             Directory.CreateSymbolicLink(alias, workerDir.FullName);
             Assert.ThrowsExactly<IOException>(() => UpdateWorker.InstalledPath(Path.Combine(alias, "installed")));
             Assert.AreEqual("untouched", File.ReadAllText(original));
-        }
-        finally { root.Delete(true); }
-    }
-
-    [TestMethod]
-    public async Task UpdateDiagnosticsAreBoundedPrivateAndDoNotPersistExceptionMessages()
-    {
-        var root = Directory.CreateTempSubdirectory("devtunnel-update-log-");
-        try
-        {
-            var log = new UpdateLog(root.FullName, Assert.Fail);
-            log.Begin("1.0.0", "v2.0.0");
-            log.Step("previous attempt");
-            log.Begin("2.0.0", "v3.0.0");
-            log.Step(new string('x', 17000));
-            var failure = new Win32Exception(5, "private command output");
-            await Assert.ThrowsExactlyAsync<Win32Exception>(() => log.TraceAsync<int>(() => throw failure));
-            var text = File.ReadAllText(log.FilePath);
-            Assert.Contains("Updating 2.0.0 to v3.0.0", text);
-            Assert.Contains("Win32Exception (HRESULT 0x", text);
-            Assert.Contains("Win32 5", text);
-            Assert.DoesNotContain("private command output", text);
-            Assert.DoesNotContain("previous attempt", text);
-            Assert.IsLessThan(16 * 1024, text.Length);
-            if (!OperatingSystem.IsWindows()) Assert.AreEqual((UnixFileMode)0x180, File.GetUnixFileMode(log.FilePath));
-            File.Delete(log.FilePath);
-            Directory.CreateDirectory(log.FilePath);
-            List<string> warnings = [];
-            var broken = new UpdateLog(root.FullName, warnings.Add);
-            broken.Begin("1.0.0", "v2.0.0");
-            Assert.AreEqual(42, await broken.TraceAsync(() => Task.FromResult(42)));
-            broken.Step("restarted");
-            Assert.Contains("Cannot write update log", warnings.Single());
         }
         finally { root.Delete(true); }
     }

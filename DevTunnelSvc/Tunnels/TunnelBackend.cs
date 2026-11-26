@@ -26,11 +26,13 @@ internal sealed class TunnelBackend : ITunnelBackend, IAsyncDisposable
     private readonly RegionCatalog regions;
     private readonly TraceSource trace = new("DevTunnelSvc.Relay", SourceLevels.Off);
     private readonly ITunnelRelayStreamFactory? transport;
+    private readonly Action<string>? writeEvent;
 
     public TunnelBackend(Func<Task<string>> userToken, HttpMessageHandler? handler = null, ITunnelRelayStreamFactory? transport = null,
-        Func<string?, CancellationToken, Task<TimeSpan?>>? measureLatency = null)
+        Func<string?, CancellationToken, Task<TimeSpan?>>? measureLatency = null, Action<string>? writeEvent = null)
     {
         this.transport = transport;
+        this.writeEvent = writeEvent;
         management = new(new ProductInfoHeaderValue("DevTunnelSvc", Program.Version),
             async () => new AuthenticationHeaderValue(TunnelAuthenticationSchemes.GitHub, await userToken()),
             tunnelServiceUri: null, httpHandler: handler);
@@ -75,6 +77,7 @@ internal sealed class TunnelBackend : ITunnelBackend, IAsyncDisposable
             await management.CreateTunnelPortAsync(tunnel, new TunnelPort { PortNumber = (ushort)map.TunnelPort, Protocol = TunnelProtocol.Tcp }, null, cancellation);
 
         TunnelRelayConnection connection = map.Host ? new MappedHost(management, trace, map) : new MappedClient(management, trace, map);
+        ObserveRelay(connection, map.Role);
         try
         {
             if (transport is not null)
@@ -89,6 +92,16 @@ internal sealed class TunnelBackend : ITunnelBackend, IAsyncDisposable
             await connection.DisposeAsync();
             throw;
         }
+    }
+
+    private void ObserveRelay(TunnelRelayConnection connection, string role)
+    {
+        if (writeEvent is null) return;
+        connection.ConnectionStatusChanged += (_, change) =>
+        {
+            var error = change.DisconnectException is { } ex ? $": {AppLog.ErrorCode(ex)}" : "";
+            writeEvent($"{role} relay: {change.PreviousStatus} -> {change.Status}{error}.");
+        };
     }
 
     private static Tunnel Identify(TunnelKey key) => new() { TunnelId = key.Id, ClusterId = key.Cluster };

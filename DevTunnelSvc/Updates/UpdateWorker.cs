@@ -11,7 +11,7 @@ internal static class UpdateWorker
 
     // The .NET bundle loader can reopen its executable to load another assembly at any time.
     // Keep the worker's own image unchanged until all install and restart work has finished.
-    internal static async Task<string> RunAsync(string installed, string[] arguments, string tag, UpdateLog log, CancellationToken ct)
+    internal static async Task<string> RunAsync(string installed, string[] arguments, string tag, AppLog log, CancellationToken ct)
     {
         ct.ThrowIfCancellationRequested();
         var directory = Path.Combine(Path.GetDirectoryName(installed)!, Prefix + Guid.NewGuid().ToString("N"));
@@ -22,17 +22,17 @@ internal static class UpdateWorker
             try
             {
                 File.Copy(installed, worker);
-                log.Step("Launching stable update worker.");
+                log.Write("Launching stable update worker.");
                 var result = await RunProcessAsync(new(worker, [.. arguments, TagOption, tag]), ct);
-                log.Step("Update worker completed.");
+                log.Write("Update worker completed.");
                 return result;
             }
             finally { File.Delete(worker); Directory.Delete(directory); }
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            log.Step($"Update failed: {UpdateLog.ErrorCode(ex)}");
-            throw new InvalidOperationException($"{UpdateLog.Detail(ex)}\nUpdate log: {log.FilePath}", ex);
+            log.Write($"Update failed: {AppLog.ErrorCode(ex)}");
+            throw new InvalidOperationException($"{AppLog.Detail(ex)}\nApplication log: {log.FilePath}", ex);
         }
     }
 

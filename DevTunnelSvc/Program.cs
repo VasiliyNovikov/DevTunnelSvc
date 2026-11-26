@@ -51,7 +51,7 @@ internal static class Program
 
         try { return await new Commands(output, error, send, actions).InvokeAsync(args); }
         catch (OperationCanceledException) { error.WriteLine("Operation cancelled or timed out."); return 1; }
-        catch (Exception ex) { error.WriteLine(UpdateLog.Detail(ex)); return 1; }
+        catch (Exception ex) { error.WriteLine(AppLog.Detail(ex)); return 1; }
     }
 
     internal static Task<GitHubCredential> LoginAsync(TextWriter output, LoginOptions options, CancellationToken ct) =>

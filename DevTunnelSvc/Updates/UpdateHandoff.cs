@@ -52,19 +52,19 @@ internal sealed record UpdateHandoff(Func<Request, CancellationToken, Task<strin
         using var download = CancellationTokenSource.CreateLinkedTokenSource(ct);
         download.CancelAfter(TimeSpan.FromMinutes(5));
         try { trace?.Invoke("Installing verified release."); await install(download.Token); trace?.Invoke($"Installed {tag}."); }
-        catch (Exception ex) { installError = ex; trace?.Invoke($"Install failed: {UpdateLog.ErrorCode(ex)}"); }
+        catch (Exception ex) { installError = ex; trace?.Invoke($"Install failed: {AppLog.ErrorCode(ex)}"); }
 
         // Leave the service running even if the install failed or was cancelled.
         try { await start(); }
         catch (Exception ex)
         {
-            trace?.Invoke($"Restart failed: {UpdateLog.ErrorCode(ex)}");
-            var result = installError is null ? $"Installed {tag}." : $"Update failed: {UpdateLog.Detail(installError)}";
-            throw new InvalidOperationException($"{result}\nThe service could not start: {UpdateLog.Detail(ex)}\nRun 'devtunnelsvc service start'.", ex);
+            trace?.Invoke($"Restart failed: {AppLog.ErrorCode(ex)}");
+            var result = installError is null ? $"Installed {tag}." : $"Update failed: {AppLog.Detail(installError)}";
+            throw new InvalidOperationException($"{result}\nThe service could not start: {AppLog.Detail(ex)}\nRun 'devtunnelsvc service start'.", ex);
         }
         var started = wasRunning ? "restarted" : "started";
         if (installError is not null)
-            throw new InvalidOperationException($"Update failed: {UpdateLog.Detail(installError)}\nThe service was {started}.", installError);
+            throw new InvalidOperationException($"Update failed: {AppLog.Detail(installError)}\nThe service was {started}.", installError);
         return $"Installed {tag} and {started} DevTunnelSvc.";
     }
 

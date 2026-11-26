@@ -9,39 +9,56 @@ internal sealed class TunnelService : IAsyncDisposable
     private readonly ITunnelBackend backend;
     private readonly SessionCredential credential;
     private readonly MappingFile mappings;
+    private readonly Action<string> writeEvent;
     private readonly Dictionary<string, MappingSession> sessions = new(StringComparer.Ordinal);
     private IEnumerable<Mapping> SavedMappings => sessions.Values.Where(s => s.Saved).Select(s => s.Map);
 
-    internal TunnelService(ITunnelBackend backend, SessionCredential credential, MappingFile mappings)
+    internal TunnelService(ITunnelBackend backend, SessionCredential credential, MappingFile mappings, Action<string> writeEvent)
     {
         this.backend = backend;
         this.credential = credential;
         this.mappings = mappings;
+        this.writeEvent = writeEvent;
         foreach (var map in mappings.Read())
-            sessions.Add(map.Name, new(map, ct => Authenticated().OpenAsync(map, ct), Task.Delay));
+            sessions.Add(map.Name, new(map, ct => Authenticated().OpenAsync(map, ct), Task.Delay, writeEvent));
     }
 
     // The local control server serializes commands; SDK sessions continue independently.
-    public Task<string> ExecuteAsync(Request request, CancellationToken ct)
+    public async Task<string> ExecuteAsync(Request request, CancellationToken ct)
+    {
+        var operation = "request";
+        try
+        {
+            var execute = ResolveCommand(request, ct);
+            // Only a recognized command name may reach the log, never the request or its result.
+            operation = request.Command;
+            var result = await execute();
+            if (operation is not ("status" or "service-pid")) writeEvent($"Command {operation} completed.");
+            return result;
+        }
+        catch (Exception ex) { writeEvent($"Control {operation} failed: {AppLog.ErrorCode(ex)}"); throw; }
+    }
+
+    private Func<Task<string>> ResolveCommand(Request request, CancellationToken ct)
     {
         if (request.Version != Control.ProtocolVersion)
             throw new InvalidDataException("Incompatible control protocol.");
         return request.Command switch
         {
-            "login" => LoginAsync(request.SignIn, ct),
-            "status" => Task.FromResult(Status()),
-            "service-pid" => Task.FromResult(Environment.ProcessId.ToString(CultureInfo.InvariantCulture)),
-            "logout" => EndSessionAsync(logout: true),
-            "create" => Authenticated().CreateAsync(region: null, ct),
+            "login" => () => LoginAsync(request.SignIn, ct),
+            "status" => () => Task.FromResult(Status()),
+            "service-pid" => () => Task.FromResult(Environment.ProcessId.ToString(CultureInfo.InvariantCulture)),
+            "logout" => () => EndSessionAsync(logout: true),
+            "create" => () => Authenticated().CreateAsync(region: null, ct),
             // Older services reject this command instead of ignoring the region and creating the tunnel elsewhere.
-            "create-in-region" => Authenticated().CreateAsync(request.Region ?? throw new ArgumentException("Missing region."), ct),
-            "list" => ListAsync(ct),
-            "regions" => RegionsAsync(ct),
-            "delete" => DeleteAsync(TunnelKey.Parse(request.Tunnel), ct),
-            "host" or "connect" => OpenAsync(Mapping.Create(request.Command == "host", request.Tunnel, request.TunnelPort, request.LocalPort), ct),
-            "stop" or "disconnect" => StopAsync(request.Tunnel, clientOnly: request.Command == "disconnect"),
-            "shutdown" => EndSessionAsync(logout: false),
-            "shutdown-for-update" => request.ServicePid == Environment.ProcessId ? EndSessionAsync(logout: false)
+            "create-in-region" => () => Authenticated().CreateAsync(request.Region ?? throw new ArgumentException("Missing region."), ct),
+            "list" => () => ListAsync(ct),
+            "regions" => () => RegionsAsync(ct),
+            "delete" => () => DeleteAsync(TunnelKey.Parse(request.Tunnel), ct),
+            "host" or "connect" => () => OpenAsync(Mapping.Create(request.Command == "host", request.Tunnel, request.TunnelPort, request.LocalPort), ct),
+            "stop" or "disconnect" => () => StopAsync(request.Tunnel, clientOnly: request.Command == "disconnect"),
+            "shutdown" => () => EndSessionAsync(logout: false),
+            "shutdown-for-update" => () => request.ServicePid == Environment.ProcessId ? EndSessionAsync(logout: false)
                 : throw new InvalidOperationException("The selected service instance has changed. Check for updates again."),
             _ => throw new ArgumentException("Unknown service command."),
         };

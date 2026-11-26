@@ -519,9 +519,12 @@ public sealed class HttpTests
             Assert.AreEqual("original", File.ReadAllText(copy));
             Assert.AreEqual(validDigest ? "verified image" : "original", File.ReadAllText(installed));
             Assert.AreEqual(force ? "service start,status" : "", string.Join(',', commands));
-            var log = File.ReadAllText(Path.Combine(state, "update.log"));
+            var log = File.ReadAllText(Path.Combine(state, "app.log"));
+            Assert.IsFalse(File.Exists(Path.Combine(state, "update.log")));
             if (force)
             {
+                Assert.Contains("[service] Control pipe ready.", log);
+                Assert.Contains("[update] Verifying the selected release", log);
                 Assert.Contains($"Stopping service PID {Environment.ProcessId}", log);
                 Assert.Contains("Installing verified release", log);
                 Assert.Contains("Launching installed service start", log);

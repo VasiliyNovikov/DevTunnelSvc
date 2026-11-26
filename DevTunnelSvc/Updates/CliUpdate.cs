@@ -15,8 +15,8 @@ internal sealed class CliUpdate(HttpClient http, string version, Func<UpdateInst
         return new ReleaseUpdate(http).CheckAsync(version, options.CheckOnly, (release, token) =>
         {
             var target = installation();
-            var log = new UpdateLog(target.Directory, Console.Error.WriteLine);
-            log.Begin(version, release.TagName);
+            var log = new AppLog(target.Directory, "update", Console.Error.WriteLine);
+            log.Write($"Updating {version} to {release.TagName}.");
             return UpdateWorker.RunAsync(target.Image, options.Force ? ["update", "--force"] : ["update"], release.TagName, log, token);
         }, ct);
     }
@@ -25,11 +25,11 @@ internal sealed class CliUpdate(HttpClient http, string version, Func<UpdateInst
     {
         var target = installation();
         var installed = UpdateWorker.InstalledPath(target.Image);
-        var log = new UpdateLog(target.Directory, Console.Error.WriteLine);
+        var log = new AppLog(target.Directory, "update", Console.Error.WriteLine);
         var handoff = force ? new UpdateHandoff((r, t) => Control.SendAsync(r, target.Pipe, t),
-            () => UpdateHandoff.StartInstalledAsync(installed, target.RunInstalled, log.Step), log.Step) : null;
-        log.Step("Verifying the selected release before installation.");
-        return log.TraceAsync(() => UpdateWorker.UntilParentClosesAsync(target.ParentClosed(), t => new ReleaseUpdate(http, handoff)
+            () => UpdateHandoff.StartInstalledAsync(installed, target.RunInstalled, log.Write), log.Write) : null;
+        log.Write("Verifying the selected release before installation.");
+        return log.TraceAsync("Worker", () => UpdateWorker.UntilParentClosesAsync(target.ParentClosed(), t => new ReleaseUpdate(http, handoff)
             .RunAsync(version, installed, false, () => UpdateWorker.AcquireLease(target.Image, installed, target.Directory), t, expectedTag), ct));
     }
 }

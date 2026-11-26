@@ -17,7 +17,8 @@ internal sealed unsafe partial class TrayIcon : IDisposable
     private IWindow? active;
 
     [SupportedOSPlatform("windows")]
-    public TrayIcon(string pipeName, Action<Exception?> stopped) : this(() => OpenWindowsWindow(TrayMenu.Create(() => PostQuitMessage(0), pipeName)), stopped) { }
+    public TrayIcon(string pipeName, Action<string> writeEvent, Action<Exception?> stopped)
+        : this(() => OpenWindowsWindow(TrayMenu.Create(() => PostQuitMessage(0), pipeName, writeEvent)), stopped) { }
 
     internal TrayIcon(Func<IWindow> factory, Action<Exception?> stopped)
     {

@@ -7,21 +7,22 @@ namespace DevTunnelSvc.Service;
 
 internal static class ControlServer
 {
-    internal static async Task RunAsync(string name, string stateDirectory, TextWriter log, CancellationToken ct)
+    internal static async Task RunAsync(string name, string stateDirectory, TextWriter log, Action<string> writeEvent, CancellationToken ct)
     {
         using var http = GitHubOAuth.CreateClient();
         http.Timeout = TimeSpan.FromSeconds(20);
         using var credential = new SessionCredential(new CredentialFile(stateDirectory),
             (token, tokenCt) => GitHubOAuth.RefreshAsync(http, token, tokenCt), TimeProvider.System);
-        await using var backend = new TunnelBackend(() => credential.RequireTokenAsync(ct));
-        await using var service = new TunnelService(backend, credential, new MappingFile(stateDirectory));
-        await RunAsync(name, service, log, ct);
+        await using var backend = new TunnelBackend(() => credential.RequireTokenAsync(ct), writeEvent: writeEvent);
+        await using var service = new TunnelService(backend, credential, new MappingFile(stateDirectory), writeEvent);
+        await RunAsync(name, service, log, writeEvent, ct);
     }
 
-    public static async Task RunAsync(string name, TunnelService service, TextWriter log, CancellationToken ct)
+    public static async Task RunAsync(string name, TunnelService service, TextWriter log, Action<string> writeEvent, CancellationToken ct)
     {
         using var pipe = new NamedPipeServerStream(name, PipeDirection.InOut, 1, PipeTransmissionMode.Byte,
             Control.Options | PipeOptions.FirstPipeInstance);
+        writeEvent("Control pipe ready.");
         while (!ct.IsCancellationRequested)
         {
             var accepted = false;
@@ -35,7 +36,9 @@ internal static class ControlServer
             catch (OperationCanceledException) when (ct.IsCancellationRequested) { return; }
             catch (Exception ex) when (ex is IOException or InvalidDataException or OperationCanceledException or JsonException)
             {
-                log.WriteLine($"Control connection failed: {ex.GetType().Name}");
+                var message = $"Control connection failed: {AppLog.ErrorCode(ex)}";
+                writeEvent(message);
+                log.WriteLine(message);
             }
             finally { if (accepted) pipe.Disconnect(); }
         }

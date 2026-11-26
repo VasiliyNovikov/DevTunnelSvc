@@ -41,7 +41,7 @@ public sealed class LifetimeTests
         using var limit = new CancellationTokenSource(TimeSpan.FromSeconds(10));
         using var log = new StringWriter();
         using var owner = new MemoryStream();
-        var run = ServiceLifetime.RunAsync(log, name, directory.FullName, limit.Token, (pipeName, _) => { Assert.AreEqual(name, pipeName); return owner; });
+        var run = ServiceLifetime.RunAsync(log, name, directory.FullName, limit.Token, (pipeName, _, _) => { Assert.AreEqual(name, pipeName); return owner; });
         try
         {
             Assert.Contains("signed out", await Control.SendAsync(new("status"), name, limit.Token));
@@ -50,6 +50,11 @@ public sealed class LifetimeTests
             Assert.Contains("stopping", await Control.SendAsync(new("shutdown"), name, limit.Token));
             await run;
             Assert.IsFalse(owner.CanWrite);
+            var history = File.ReadAllText(Path.Combine(directory.FullName, "app.log"));
+            Assert.Contains($"[service] Starting DevTunnelSvc {Program.Version}.", history);
+            Assert.Contains("Control pipe ready.", history);
+            Assert.Contains("Service failed: IOException", history);
+            Assert.Contains("Service stopped.", history);
             using var lease = InstanceLease.Acquire(directory.FullName);
             Assert.IsTrue(lease.CanWrite);
         }
@@ -119,7 +124,7 @@ public sealed class LifetimeTests
         try
         {
             var service = ServiceLifetime.RunAsync(TextWriter.Null, $"devtunnel-{Guid.NewGuid():N}", directory.FullName, limit.Token,
-                (_, callback) => { signal = callback; return owner; });
+                (_, _, callback) => { signal = callback; return owner; });
             Assert.IsNotNull(signal);
             signal(fail ? new IOException("Explorer unavailable") : null);
             if (fail)

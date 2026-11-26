@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Net;
 using System.Net.Sockets;
@@ -54,7 +55,8 @@ public sealed class ForwardingTests
         var tunnelPort = Port(occupied);
         using var peer = new RelayPeer();
         using var handler = Api(tunnelPort);
-        await using var backend = new TunnelBackend(() => Task.FromResult("local-test"), handler, peer);
+        var events = new ConcurrentQueue<string>();
+        await using var backend = new TunnelBackend(() => Task.FromResult("local-test"), handler, peer, writeEvent: events.Enqueue);
         var opening = backend.OpenAsync(Mapping.Create(false, "blue-tunnel.use2", tunnelPort, localPort), ct);
         await peer.Authenticated.Task.WaitAsync(ct);
         Assert.IsNull(await peer.Ports.ForwardFromRemotePortAsync(IPAddress.Loopback, Port(target), "127.0.0.1", Port(target), ct));
@@ -73,6 +75,12 @@ public sealed class ForwardingTests
             await Task.Delay(20, ct);
         Assert.AreEqual("WaitingForPort", client.State);
         await client.DisposeAsync();
+        var history = string.Join('\n', events);
+        Assert.Contains("client relay:", history);
+        Assert.Contains(" -> Connected.", history);
+        Assert.Contains(" -> Disconnected", history);
+        Assert.DoesNotContain("blue-tunnel", history);
+        Assert.DoesNotContain("local-test", history);
         using var stopped = new TcpClient();
         await Assert.ThrowsExactlyAsync<SocketException>(() => stopped.ConnectAsync(IPAddress.Loopback, localPort, ct).AsTask());
     }
