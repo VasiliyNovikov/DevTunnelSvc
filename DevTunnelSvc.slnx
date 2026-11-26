@@ -17,13 +17,14 @@
     <File Path="README.md" />
   </Folder>
   <Folder Name="/eng/">
+    <File Path="eng/install-fixture.cs" />
+    <File Path="eng/install-test-cmdlets.cs" />
     <File Path="eng/linux-release.Dockerfile" />
     <File Path="eng/metrics.cs" />
     <File Path="eng/quality.cs" />
     <File Path="eng/release.cs" />
-    <File Path="eng/test-install.ps1" />
-    <File Path="eng/test-install.sh" />
-    <File Path="eng/test-update.ps1" />
+    <File Path="eng/test-install.cs" />
+    <File Path="eng/test-update.cs" />
     <File Path="eng/update-smoke.cs" />
   </Folder>
   <Project Path="DevTunnelSvc/DevTunnelSvc.csproj" />

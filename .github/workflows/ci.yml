@@ -23,16 +23,11 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v6
-      - name: Test piped Linux installer
-        if: runner.os == 'Linux'
-        run: sh eng/test-install.sh
-      - name: Test piped Windows installer
-        if: runner.os == 'Windows'
-        shell: powershell
-        run: .\eng\test-install.ps1
       - uses: actions/setup-dotnet@v5
         with:
           dotnet-version: '11.0.x'
+      - name: Test piped installer with Windows PowerShell 5.1 or POSIX sh
+        run: dotnet eng/test-install.cs
       - name: Run Release tests
         if: matrix.rid != 'linux-x64'
         run: dotnet test DevTunnelSvc.slnx --configuration Release
@@ -73,8 +68,7 @@ jobs:
           }
       - name: Exercise offline self-update across published single-file bundles
         if: matrix.rid == 'win-x64'
-        shell: pwsh
-        run: .\eng\test-update.ps1
+        run: dotnet eng/test-update.cs
       - uses: actions/upload-artifact@v7
         with:
           name: package-${{ matrix.rid }}
