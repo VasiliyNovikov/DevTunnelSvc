@@ -1,7 +1,9 @@
 using System.ComponentModel;
 using System.Diagnostics;
+using System.IO.Pipes;
 using System.Runtime.InteropServices;
 using DevTunnelSvc.Platform;
+using DevTunnelSvc.Service;
 using DevTunnelSvc.Updates;
 
 namespace DevTunnelSvc.Tests;
@@ -16,19 +18,40 @@ public sealed class TrayMenuTests
         using var menu = stub.Menu;
         stub.Select = TrayMenu.Command.None;
         menu.Show(11, 12);
-        Assert.AreEqual("Update,About,---,Exit", string.Join(',', stub.Labels));
+        Assert.AreEqual("Status,Update,About,---,Exit", string.Join(',', stub.Labels));
         Assert.AreEqual("theme,create,foreground,track,post,destroy", string.Join(',', stub.Tracking));
         Assert.AreEqual(0u, stub.UpdateFlags);
         Assert.IsEmpty(stub.Actions);
         stub.Select = TrayMenu.Command.About;
         menu.Show(11, 12);
-        Assert.StartsWith("about:DevTunnelSvc", stub.Actions.Single());
+        Assert.StartsWith("About DevTunnelSvc:DevTunnelSvc", stub.Actions.Single());
         Assert.Contains(Program.Version, stub.Actions.Single());
         Assert.Contains("Microsoft Dev Tunnels", stub.Actions.Single());
         stub.Select = TrayMenu.Command.Exit;
         menu.Show(11, 12);
         Assert.AreEqual("exit", stub.Actions.Last());
         Assert.AreEqual(3, stub.Destroyed);
+    }
+
+    [TestMethod]
+    public async Task StatusShowsAFreshReportOnEachSelectionAndLeavesTheServiceRunningOnFailure()
+    {
+        var stub = new PopupStub { Select = TrayMenu.Command.Status };
+        using var menu = stub.Menu;
+        using var server = new NamedPipeServerStream(stub.PipeName, PipeDirection.InOut, 1, PipeTransmissionMode.Byte, Control.Options);
+        using var limit = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        const string signedOut = "Service running; signed out.";
+        const string connected = "Service running; signed in.\r\nhost:demo.use2  Connected  demo.use2:8080 -> localhost:3000";
+        foreach (var reply in new Reply[] { new(true, signedOut), new(false, "Cannot read status."), new(true, connected) })
+        {
+            var selection = Task.Run(() => menu.Show(11, 12), limit.Token);
+            await server.WaitForConnectionAsync(limit.Token);
+            Assert.AreEqual(new Request("status"), await Control.ReadAsync(server, ControlJson.Default.Request, limit.Token));
+            await Control.WriteAsync(server, reply, ControlJson.Default.Reply, limit.Token);
+            await selection.WaitAsync(limit.Token);
+            server.Disconnect();
+        }
+        CollectionAssert.AreEqual(new[] { $"DevTunnelSvc Status:{signedOut}", "error:Cannot read status.", $"DevTunnelSvc Status:{connected}" }, stub.Actions);
     }
 
     [TestMethod]
@@ -253,15 +276,16 @@ public sealed class TrayMenuTests
             TrackAt = (menu, _, _, _, hwnd, _) =>
             {
                 Assert.AreEqual(owner, hwnd);
-                Assert.AreEqual(4, GetMenuItemCount(menu));
-                Assert.AreEqual((uint)TrayMenu.Command.Update, GetMenuItemID(menu, 0));
-                Assert.AreEqual((uint)TrayMenu.Command.About, GetMenuItemID(menu, 1));
-                Assert.AreEqual((uint)TrayMenu.Command.Exit, GetMenuItemID(menu, 3));
+                Assert.AreEqual(5, GetMenuItemCount(menu));
+                Assert.AreEqual((uint)TrayMenu.Command.Status, GetMenuItemID(menu, 0));
+                Assert.AreEqual((uint)TrayMenu.Command.Update, GetMenuItemID(menu, 1));
+                Assert.AreEqual((uint)TrayMenu.Command.About, GetMenuItemID(menu, 2));
+                Assert.AreEqual((uint)TrayMenu.Command.Exit, GetMenuItemID(menu, 4));
                 return (uint)TrayMenu.Command.Exit;
             },
         };
         var actions = new TrayMenu(popup, () => exits++, () => throw new AssertFailedException(),
-            new((_, text, _, _) => throw new AssertFailedException(text)), (_, _, _) => Assert.Fail());
+            new((_, text, _, _) => throw new AssertFailedException(text)), string.Empty, (_, _, _) => Assert.Fail());
         using var window = TrayIcon.OpenWindowsWindow(actions);
         owner = window.Handle;
         Assert.IsTrue(TrayIcon.PostMessageW(owner, TrayIcon.CallbackMessage, 0, (1 << 16) | 0x7B));
@@ -275,6 +299,7 @@ public sealed class TrayMenuTests
 
     private sealed class PopupStub
     {
+        public string PipeName { get; } = $"devtunnel-tray-{Guid.NewGuid():N}";
         public TrayMenu.Command Select { get; set; }
         public bool LaunchFails { get; set; }
         public string? BrokenItem { get; set; }
@@ -317,10 +342,11 @@ public sealed class TrayMenuTests
             Assert.AreEqual((nint)11, owner);
             Actions.Add((flags & 0x10) != 0 ? $"error:{text}" : $"{title}: {text}");
             return 1;
-        }), (owner, icon, text) =>
+        }), PipeName, (owner, icon, content) =>
         {
             Assert.AreEqual(((nint)11, (nint)12), (owner, icon));
-            Actions.Add($"about:{text}");
+            Assert.AreEqual(Select == TrayMenu.Command.Status, content.Scrollable);
+            Actions.Add($"{content.Title}:{content.Text}");
         });
 
         private bool Add(nint m, uint flags, nuint id, string? text)

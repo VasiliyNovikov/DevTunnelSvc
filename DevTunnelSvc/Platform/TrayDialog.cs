@@ -4,7 +4,7 @@ using System.Runtime.Versioning;
 
 namespace DevTunnelSvc.Platform;
 
-internal sealed unsafe partial class AboutDialog(AboutDialog.Surface surface)
+internal sealed unsafe partial class TrayDialog(TrayDialog.Surface surface)
 {
     private const uint Background = 0x202020, Foreground = 0xF5F5F5;
     internal sealed record Surface(Func<bool> UseDark, Action<nint> SetIcon, Action<nint, bool> Apply,
@@ -13,12 +13,12 @@ internal sealed unsafe partial class AboutDialog(AboutDialog.Surface surface)
     private Exception? failure;
 
     [SupportedOSPlatform("windows")]
-    internal static void Show(nint owner, nint icon, string message)
+    internal static void Show(nint owner, nint icon, TrayDialogContent content)
     {
         WithBrush(CreateSolidBrush, brush =>
         {
             var dialog = Create(icon, brush, WindowsTheme.SystemTheme.UseDarkPalette);
-            fixed (byte* template = AboutTemplate.Build(message))
+            fixed (byte* template = TrayDialogTemplate.Build(content))
             {
                 var result = DialogBoxIndirectParamW(GetModuleHandleW(null), template, owner, dialog.Handle, 0);
                 dialog.CheckResult(result, Marshal.GetLastPInvokeError());
@@ -27,23 +27,23 @@ internal sealed unsafe partial class AboutDialog(AboutDialog.Surface surface)
     }
 
     [SupportedOSPlatform("windows")]
-    internal static AboutDialog Create(nint icon, nint brush, Func<bool> useDark) => new(new(useDark, hwnd =>
+    internal static TrayDialog Create(nint icon, nint brush, Func<bool> useDark) => new(new(useDark, hwnd =>
     {
         _ = SendMessageW(hwnd, 0x0080, 0, icon); // WM_SETICON / ICON_SMALL
-        _ = SendDlgItemMessageW(hwnd, AboutTemplate.IconId, 0x0170, (nuint)icon, 0); // STM_SETICON
+        _ = SendDlgItemMessageW(hwnd, TrayDialogTemplate.IconId, 0x0170, (nuint)icon, 0); // STM_SETICON
     }, ApplyTheme, dc => DarkBackground(dc, brush), DrawOk, (hwnd, result) => EndDialog(hwnd, result)));
 
     internal static void WithBrush(Func<uint, nint> create, Action<nint> show, Func<nint, bool> delete)
     {
         var brush = create(Background);
-        if (brush == 0) throw new InvalidOperationException("Could not create the About dialog background.");
+        if (brush == 0) throw new InvalidOperationException("Could not create the tray dialog background.");
         try { show(brush); }
         finally { _ = delete(brush); }
     }
 
     internal void CheckResult(nint result, int error)
     {
-        if (failure is not null) throw new InvalidOperationException($"About dialog failed: {failure.Message}", failure);
+        if (failure is not null) throw new InvalidOperationException($"Tray dialog failed: {failure.Message}", failure);
         if (result == -1) throw new Win32Exception(error);
     }
 
@@ -114,7 +114,7 @@ internal sealed unsafe partial class AboutDialog(AboutDialog.Surface surface)
         var (fill, showFocus) = ButtonAppearance(item.State);
         var dc = item.Dc;
         var saved = SaveDC(dc);
-        if (saved == 0) throw new InvalidOperationException("Could not save the About button drawing context.");
+        if (saved == 0) throw new InvalidOperationException("Could not save the OK button drawing context.");
         try
         {
             var brush = GetStockObject(18); // DC_BRUSH, borrowed; its color belongs to this DC

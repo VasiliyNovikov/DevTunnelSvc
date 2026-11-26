@@ -41,7 +41,7 @@ public sealed class LifetimeTests
         using var limit = new CancellationTokenSource(TimeSpan.FromSeconds(10));
         using var log = new StringWriter();
         using var owner = new MemoryStream();
-        var run = ServiceLifetime.RunAsync(log, name, directory.FullName, limit.Token, _ => owner);
+        var run = ServiceLifetime.RunAsync(log, name, directory.FullName, limit.Token, (pipeName, _) => { Assert.AreEqual(name, pipeName); return owner; });
         try
         {
             Assert.Contains("signed out", await Control.SendAsync(new("status"), name, limit.Token));
@@ -119,7 +119,7 @@ public sealed class LifetimeTests
         try
         {
             var service = ServiceLifetime.RunAsync(TextWriter.Null, $"devtunnel-{Guid.NewGuid():N}", directory.FullName, limit.Token,
-                callback => { signal = callback; return owner; });
+                (_, callback) => { signal = callback; return owner; });
             Assert.IsNotNull(signal);
             signal(fail ? new IOException("Explorer unavailable") : null);
             if (fail)

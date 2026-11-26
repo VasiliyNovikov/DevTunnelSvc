@@ -3,14 +3,16 @@ using System.Diagnostics;
 using System.Globalization;
 using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
+using System.Text.Json;
+using DevTunnelSvc.Service;
 
 namespace DevTunnelSvc.Platform;
 
 internal sealed partial class TrayMenu(TrayMenu.Popup popup, Action exit, Func<Process> launchUpdate, TrayMenu.Dialogs dialogs,
-    Action<nint, nint, string> about) : IDisposable
+    string pipeName, Action<nint, nint, TrayDialogContent> showDialog) : IDisposable
 {
     internal const string UpdateWorker = "__tray-update";
-    internal enum Command : uint { None, Update, About, Exit }
+    internal enum Command : uint { None, Status, Update, About, Exit }
     internal delegate bool Append(nint menu, uint flags, nuint id, string? text);
     internal delegate uint Track(nint menu, uint flags, int x, int y, nint owner, nint parameters);
     internal sealed record Popup(Action PrepareTheme, Func<nint> Create, Append Add, Func<nint, Point> Anchor, Func<nint, bool> Foreground,
@@ -19,7 +21,7 @@ internal sealed partial class TrayMenu(TrayMenu.Popup popup, Action exit, Func<P
     private bool showing;
 
     [SupportedOSPlatform("windows")]
-    internal static TrayMenu Create(Action exit) => new(SystemPopup, exit, LaunchUpdater, SystemDialogs, AboutDialog.Show);
+    internal static TrayMenu Create(Action exit, string pipeName) => new(SystemPopup, exit, LaunchUpdater, SystemDialogs, pipeName, TrayDialog.Show);
 
     [SupportedOSPlatform("windows")]
     internal static Popup SystemPopup => new(WindowsTheme.SystemTheme.PrepareMenu, CreatePopupMenu, AppendMenuW, IconAnchor, SetForegroundWindow,
@@ -34,13 +36,16 @@ internal sealed partial class TrayMenu(TrayMenu.Popup popup, Action exit, Func<P
             var busy = updater is { HasExited: false };
             switch (Choose(owner, busy))
             {
+                case Command.Status:
+                    showDialog(owner, icon, new("DevTunnelSvc Status", ReadStatus(), Scrollable: true));
+                    break;
                 case Command.Update when !busy:
                     updater?.Dispose();
                     updater = null;
                     updater = launchUpdate();
                     break;
                 case Command.About:
-                    about(owner, icon, $"DevTunnelSvc {Program.Version}\r\n\r\nHosts and forwards Microsoft Dev Tunnels for your Windows user.");
+                    showDialog(owner, icon, new("About DevTunnelSvc", $"DevTunnelSvc {Program.Version}\r\n\r\nHosts and forwards Microsoft Dev Tunnels for your Windows user."));
                     break;
                 case Command.Exit:
                     exit();
@@ -54,6 +59,21 @@ internal sealed partial class TrayMenu(TrayMenu.Popup popup, Action exit, Func<P
         finally { showing = false; }
     }
 
+    private string ReadStatus()
+    {
+        // Use the serialized control path, but don't leave the tray thread waiting on a busy service.
+        using var limit = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+        try { return Control.SendAsync(new("status"), pipeName, limit.Token).GetAwaiter().GetResult(); }
+        catch (Exception ex) when (ex is OperationCanceledException or IOException { InnerException: TimeoutException })
+        {
+            throw new IOException("The service did not answer the status request in time. Try again.", ex);
+        }
+        catch (Exception ex) when (ex is InvalidDataException or JsonException or UnauthorizedAccessException)
+        {
+            throw new IOException($"Could not read service status: {ex.Message}", ex);
+        }
+    }
+
     private Command Choose(nint owner, bool updating)
     {
         popup.PrepareTheme();
@@ -61,7 +81,8 @@ internal sealed partial class TrayMenu(TrayMenu.Popup popup, Action exit, Func<P
         if (menu == 0) throw new Win32Exception(Marshal.GetLastPInvokeError());
         try
         {
-            if (!popup.Add(menu, updating ? 1u : 0u, (nuint)Command.Update, "&Update") ||
+            if (!popup.Add(menu, 0, (nuint)Command.Status, "&Status") ||
+                !popup.Add(menu, updating ? 1u : 0u, (nuint)Command.Update, "&Update") ||
                 !popup.Add(menu, 0, (nuint)Command.About, "&About") ||
                 !popup.Add(menu, 0x800, 0, null) || // MF_SEPARATOR
                 !popup.Add(menu, 0, (nuint)Command.Exit, "E&xit"))

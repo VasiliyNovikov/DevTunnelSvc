@@ -260,7 +260,7 @@ public sealed class PlatformTests
         public TrayIcon.WindowsWindow? Window { get; set; }
         public TrayMenu Menu => new(new(() => { }, () => 21, (_, _, _, _) => true, _ => default, _ => true, (_, _, _, _, _, _) =>
             { Events.Add("pick"); return 0; }, (_, _, _, _) => true, _ => true), () => Assert.Fail(), () => throw new AssertFailedException(),
-            new((_, text, _, _) => throw new AssertFailedException(text)), (_, _, _) => Assert.Fail());
+            new((_, text, _, _) => throw new AssertFailedException(text)), string.Empty, (_, _, _) => Assert.Fail());
         public TrayIcon.Shell Api => new(Notify, Receive, Dispatch, Close, hwnd =>
         {
             Assert.AreEqual((nint)11, hwnd);

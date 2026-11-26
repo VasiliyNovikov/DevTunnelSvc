@@ -84,7 +84,7 @@ public sealed class WindowsAppearanceTests
         Assert.AreEqual(missingExport ? 1 : 0, attempts);
         Assert.HasCount(attempts, warnings);
         if (missingExport) Assert.Contains("missing export", warnings.Single());
-        Assert.IsTrue(theme.UseDarkPalette(), "Missing menu APIs should not disable the independent About palette.");
+        Assert.IsTrue(theme.UseDarkPalette(), "Missing menu APIs should not disable the independent dialog palette.");
     }
 
     [TestMethod]
@@ -108,11 +108,11 @@ public sealed class WindowsAppearanceTests
     }
 
     [TestMethod]
-    public void AboutRefreshesAnOpenDialogAndReturnsPaintingToWindowsInLightMode()
+    public void TrayDialogRefreshesAndReturnsPaintingToWindowsInLightMode()
     {
         var dark = false;
         List<string> actions = [];
-        var dialog = new AboutDialog(new(() => dark, hwnd => actions.Add($"icon:{hwnd}"),
+        var dialog = new TrayDialog(new(() => dark, hwnd => actions.Add($"icon:{hwnd}"),
             (hwnd, useDark) => actions.Add($"{hwnd}:{useDark}"), dc => { Assert.AreEqual((nint)22, dc); return 33; },
             item => actions.Add($"button:{item}"), (_, _) => Assert.Fail()));
         Assert.AreEqual((nint)1, dialog.Handle(11, 0x0110, 0, 0));
@@ -129,10 +129,10 @@ public sealed class WindowsAppearanceTests
     }
 
     [TestMethod]
-    public void AboutClosesOnOkEscapeAndCloseButNotOtherControlNotifications()
+    public void TrayDialogClosesOnOkEscapeAndCloseButNotOtherControlNotifications()
     {
         List<(nint, nint)> ends = [];
-        var dialog = new AboutDialog(new(() => false, _ => Assert.Fail(), (_, _) => Assert.Fail(), _ => throw new AssertFailedException(),
+        var dialog = new TrayDialog(new(() => false, _ => Assert.Fail(), (_, _) => Assert.Fail(), _ => throw new AssertFailedException(),
             _ => Assert.Fail(), (hwnd, result) => ends.Add((hwnd, result))));
         Assert.AreEqual((nint)0, dialog.Handle(11, 0x0111, 3, 0));
         Assert.AreEqual((nint)0, dialog.Handle(11, 0x0111, 0x10001, 55));
@@ -146,14 +146,14 @@ public sealed class WindowsAppearanceTests
     [TestMethod]
     public void DarkDefaultButtonIndicatesPressAndHonorsWindowsFocusCues()
     {
-        var normal = AboutDialog.ButtonAppearance(0);
-        var pressed = AboutDialog.ButtonAppearance(1);
+        var normal = TrayDialog.ButtonAppearance(0);
+        var pressed = TrayDialog.ButtonAppearance(1);
         Assert.IsFalse(normal.ShowFocus);
         Assert.IsFalse(pressed.ShowFocus);
         Assert.AreNotEqual(normal.Fill, pressed.Fill);
-        Assert.AreEqual((pressed.Fill, true), AboutDialog.ButtonAppearance(0x11));
-        Assert.AreEqual((normal.Fill, false), AboutDialog.ButtonAppearance(0x210)); // keyboard cues hidden
-        Assert.AreEqual((normal.Fill, true), AboutDialog.ButtonAppearance(0x10));
+        Assert.AreEqual((pressed.Fill, true), TrayDialog.ButtonAppearance(0x11));
+        Assert.AreEqual((normal.Fill, false), TrayDialog.ButtonAppearance(0x210)); // keyboard cues hidden
+        Assert.AreEqual((normal.Fill, true), TrayDialog.ButtonAppearance(0x10));
     }
 
     [TestMethod]
@@ -161,12 +161,12 @@ public sealed class WindowsAppearanceTests
     {
         var released = 0;
         var ended = 0;
-        var dialog = new AboutDialog(new(() => throw new IOException("theme read failed"), _ => { }, (_, _) => Assert.Fail(),
+        var dialog = new TrayDialog(new(() => throw new IOException("theme read failed"), _ => { }, (_, _) => Assert.Fail(),
             _ => throw new AssertFailedException(), _ => Assert.Fail(), (hwnd, result) =>
             { Assert.AreEqual(((nint)11, (nint)0), (hwnd, result)); ended++; }));
         dialog.CheckResult(1, 0);
         Assert.AreEqual(87, Assert.ThrowsExactly<Win32Exception>(() => dialog.CheckResult(-1, 87)).NativeErrorCode);
-        var failure = Assert.ThrowsExactly<InvalidOperationException>(() => AboutDialog.WithBrush(color =>
+        var failure = Assert.ThrowsExactly<InvalidOperationException>(() => TrayDialog.WithBrush(color =>
         {
             Assert.AreEqual(0x202020u, color);
             return 33;
@@ -178,16 +178,17 @@ public sealed class WindowsAppearanceTests
         }, brush => { Assert.AreEqual((nint)33, brush); released++; return true; }));
         Assert.Contains("theme read failed", failure.Message);
         Assert.AreEqual((1, 1), (ended, released));
-        Assert.Contains("About dialog background", Assert.ThrowsExactly<InvalidOperationException>(() =>
-            AboutDialog.WithBrush(_ => 0, _ => Assert.Fail(), _ => throw new AssertFailedException())).Message);
+        Assert.Contains("tray dialog background", Assert.ThrowsExactly<InvalidOperationException>(() =>
+            TrayDialog.WithBrush(_ => 0, _ => Assert.Fail(), _ => throw new AssertFailedException())).Message);
     }
 
     [TestMethod]
-    [DataRow("DevTunnelSvc 1.2.3\r\n\r\nA & B")]
-    [DataRow("DevTunnelSvc 10.2.3\r\n\r\nA & B")]
-    public void AboutTemplateLaysOutTheIconLiteralVersionAndDefaultButton(string message)
+    [DataRow("About DevTunnelSvc", "DevTunnelSvc 1.2.3\r\n\r\nA & B", false)]
+    [DataRow("About DevTunnelSvc", "DevTunnelSvc 10.2.3\r\n\r\nA & B", false)]
+    [DataRow("DevTunnelSvc Status", "Service running; signed in.\r\nMapping A & B", true)]
+    public void DialogTemplateLaysOutTheIconLiteralTextAndDefaultButton(string title, string message, bool scrollable)
     {
-        var template = AboutTemplate.Build(message);
+        var template = TrayDialogTemplate.Build(new(title, message, scrollable));
         using var buffer = new MemoryStream(template);
         using var r = new BinaryReader(buffer, Encoding.Unicode);
         string Text() { var start = (int)buffer.Position; while (r.ReadUInt16() != 0) { } return Encoding.Unicode.GetString(template, start, (int)buffer.Position - start - 2); }
@@ -198,10 +199,11 @@ public sealed class WindowsAppearanceTests
         var width = r.ReadInt16();
         var height = r.ReadInt16();
         Assert.AreEqual(0u, r.ReadUInt32()); // no menu, default dialog class
-        Assert.AreEqual("About DevTunnelSvc", Text());
+        Assert.AreEqual(title, Text());
         Assert.IsGreaterThan((ushort)0, r.ReadUInt16());
         Assert.AreEqual("Segoe UI", Text());
-        foreach (var (id, atom, style, text) in new[] { (100, 0x82, 0x43u, ""), (101, 0x82, 0x80u, message), (1, 0x80, 0x10001u, "OK") })
+        var body = scrollable ? (101, 0x81, 0x210844u, message) : (101, 0x82, 0x80u, message);
+        foreach (var (id, atom, style, text) in new[] { (100, 0x82, 0x43u, ""), body, (1, 0x80, 0x10001u, "OK") })
         {
             buffer.Position = (buffer.Position + 3) & ~3L;
             Assert.AreEqual(0x50000000u | style, r.ReadUInt32());
@@ -221,22 +223,31 @@ public sealed class WindowsAppearanceTests
     }
 
     [TestMethod]
-    public void WindowsCanThemeTheNativeAboutDialogWithoutShowingIt()
+    [DataRow(false)]
+    [DataRow(true)]
+    public void WindowsCanThemeTheNativeTrayDialogsWithoutShowingThem(bool status)
     {
         if (!OperatingSystem.IsWindows()) return;
-        const string message = "DevTunnelSvc 1.2.3\r\n\r\nHosts & forwards";
+        var content = status ? new TrayDialogContent("DevTunnelSvc Status", string.Join("\r\n", Enumerable.Range(1, 80).Select(n => $"Mapping {n}")), true)
+            : new TrayDialogContent("About DevTunnelSvc", "DevTunnelSvc 1.2.3\r\n\r\nHosts & forwards");
         var dark = true;
         var brush = GetStockObject(4); // Borrow a real black brush for this hidden window.
-        var dialog = AboutDialog.Create(0, brush, () => dark);
+        var dialog = TrayDialog.Create(0, brush, () => dark);
         DialogProc procedure = dialog.Handle;
-        var hwnd = CreateDialogIndirectParamW(0, AboutTemplate.Build(message), 0, procedure, 0);
+        var hwnd = CreateDialogIndirectParamW(0, TrayDialogTemplate.Build(content), 0, procedure, 0);
         Assert.AreNotEqual((nint)0, hwnd, $"CreateDialogIndirectParamW failed: {Marshal.GetLastPInvokeError()}");
         try
         {
-            Assert.AreNotEqual((nint)0, GetDlgItem(hwnd, AboutTemplate.IconId));
-            var text = new char[128];
-            Assert.AreEqual((uint)message.Length, GetDlgItemTextW(hwnd, 101, text, text.Length));
-            Assert.AreEqual(message, new string(text, 0, message.Length));
+            Assert.AreNotEqual((nint)0, GetDlgItem(hwnd, TrayDialogTemplate.IconId));
+            var text = new char[content.Text.Length + 1];
+            Assert.AreEqual((uint)content.Text.Length, GetDlgItemTextW(hwnd, 101, text, text.Length));
+            Assert.AreEqual(content.Text, new string(text, 0, content.Text.Length));
+            if (status)
+            {
+                var body = GetDlgItem(hwnd, 101);
+                _ = SendMessageW(body, 0x00B6, 0, 79); // EM_LINESCROLL
+                Assert.IsTrue(SendMessageW(body, 0x00CE, 0, 0) > 0); // EM_GETFIRSTVISIBLELINE
+            }
             Assert.AreEqual(2u, GetDlgItemTextW(hwnd, 1, text, text.Length));
             Assert.AreEqual("OK", new string(text, 0, 2));
             var button = GetDlgItem(hwnd, 1);

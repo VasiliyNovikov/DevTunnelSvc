@@ -17,13 +17,13 @@ internal static class ServiceLifetime
         RunAsync(log, Control.PipeName, InstanceLease.DefaultDirectory, ct, TrayLifetime.ForCurrentPlatform);
 
     internal static async Task RunAsync(TextWriter log, string name, string stateDirectory, CancellationToken ct,
-        Func<Action<Exception?>, IDisposable>? createTray = null)
+        Func<string, Action<Exception?>, IDisposable>? createTray = null)
     {
         using var instance = InstanceLease.Acquire(stateDirectory);
         using var lifetime = CancellationTokenSource.CreateLinkedTokenSource(ct);
         using var term = OperatingSystem.IsLinux() ? PosixSignalRegistration.Create(PosixSignal.SIGTERM,
             signal => { signal.Cancel = true; lifetime.Cancel(); }) : null;
-        using var tray = new TrayLifetime(createTray);
+        using var tray = new TrayLifetime(name, createTray);
         using var http = GitHubOAuth.CreateClient();
         http.Timeout = TimeSpan.FromSeconds(20);
         using var credential = new SessionCredential(new CredentialFile(stateDirectory),

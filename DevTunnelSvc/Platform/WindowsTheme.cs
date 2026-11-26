@@ -46,7 +46,7 @@ internal sealed partial class WindowsTheme(bool supportsMenuTheme, Func<bool> hi
         if (build < 17763) return;
         // DWMWA_USE_IMMERSIVE_DARK_MODE was attribute 19 before Windows 10 2004.
         var hr = set(build >= 19041 ? 20u : 19u, dark ? 1 : 0);
-        if (hr < 0) warn($"Cannot theme the About title bar (HRESULT 0x{hr:X8}).");
+        if (hr < 0) warn($"Cannot theme the tray dialog title bar (HRESULT 0x{hr:X8}).");
     }
 
     private static void SetMenuMode(int mode)

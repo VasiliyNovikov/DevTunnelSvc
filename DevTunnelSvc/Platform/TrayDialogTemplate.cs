@@ -2,32 +2,39 @@ using System.Text;
 
 namespace DevTunnelSvc.Platform;
 
-internal static class AboutTemplate
+internal sealed record TrayDialogContent(string Title, string Text, bool Scrollable = false);
+
+internal static class TrayDialogTemplate
 {
     internal const ushort IconId = 100;
 
     // DLGTEMPLATE uses dialog units (not pixels) and DWORD-aligned DLGITEMTEMPLATE headers.
-    internal static byte[] Build(string message)
+    internal static byte[] Build(TrayDialogContent content)
     {
         using var buffer = new MemoryStream();
         using var writer = new BinaryWriter(buffer, Encoding.Unicode, leaveOpen: true);
         writer.Write(0x80C808C0u); // popup, caption, system menu, centered modal frame, explicit font
         writer.Write(0u);
         writer.Write((ushort)3);
-        Bounds(writer, (0, 0, 242, 84));
+        var (width, height) = content.Scrollable ? (360, 168) : (242, 84);
+        Bounds(writer, (0, 0, width, height));
         writer.Write(0u); // no menu, default dialog class
-        String(writer, "About DevTunnelSvc");
+        String(writer, content.Title);
         writer.Write((ushort)9);
         String(writer, "Segoe UI");
 
         Control(writer, IconId, 0x82, 0x43, (12, 12, 25, 25), ""); // static icon
-        Control(writer, 101, 0x82, 0x80, (47, 12, 183, 41), message); // SS_NOPREFIX: version is literal text
-        Control(writer, 1, 0x80, 0x10001, (180, 59, 50, 14), "OK"); // tab stop, default pushbutton
+        var textBounds = (47, 12, width - 59, height - 43);
+        if (content.Scrollable)
+            Control(writer, 101, 0x81, 0x210844, textBounds, content.Text); // read-only multiline edit, vertical scroll, tab stop
+        else
+            Control(writer, 101, 0x82, 0x80, textBounds, content.Text); // SS_NOPREFIX: literal text
+        Control(writer, 1, 0x80, 0x10001, (width - 62, height - 25, 50, 14), "OK");
         return buffer.ToArray();
     }
 
     private static void Control(BinaryWriter writer, ushort id, ushort atom, uint style,
-        (short X, short Y, short Width, short Height) bounds, string caption)
+        (int X, int Y, int Width, int Height) bounds, string caption)
     {
         if ((writer.BaseStream.Position & 2) != 0) writer.Write((ushort)0);
         writer.Write(0x50000000u | style); // WS_CHILD | WS_VISIBLE
@@ -40,12 +47,12 @@ internal static class AboutTemplate
         writer.Write((ushort)0); // no creation data
     }
 
-    private static void Bounds(BinaryWriter writer, (short X, short Y, short Width, short Height) value)
+    private static void Bounds(BinaryWriter writer, (int X, int Y, int Width, int Height) value)
     {
-        writer.Write(value.X);
-        writer.Write(value.Y);
-        writer.Write(value.Width);
-        writer.Write(value.Height);
+        writer.Write(checked((short)value.X));
+        writer.Write(checked((short)value.Y));
+        writer.Write(checked((short)value.Width));
+        writer.Write(checked((short)value.Height));
     }
 
     private static void String(BinaryWriter writer, string value)

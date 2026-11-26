@@ -17,7 +17,7 @@ internal sealed unsafe partial class TrayIcon : IDisposable
     private IWindow? active;
 
     [SupportedOSPlatform("windows")]
-    public TrayIcon(Action<Exception?> stopped) : this(() => OpenWindowsWindow(TrayMenu.Create(() => PostQuitMessage(0))), stopped) { }
+    public TrayIcon(string pipeName, Action<Exception?> stopped) : this(() => OpenWindowsWindow(TrayMenu.Create(() => PostQuitMessage(0), pipeName)), stopped) { }
 
     internal TrayIcon(Func<IWindow> factory, Action<Exception?> stopped)
     {
@@ -130,7 +130,7 @@ internal sealed unsafe partial class TrayIcon : IDisposable
 
     internal static void Quit(nint hwnd, Func<bool> endMenu, Func<nint, nint> activePopup, Post post, Action<int> quit)
     {
-        // Shutdown can arrive inside TrackPopupMenuEx or the About dialog's nested message loop.
+        // Shutdown can arrive inside TrackPopupMenuEx or an owned dialog's nested message loop.
         _ = endMenu();
         var popup = activePopup(hwnd);
         if (popup != 0 && popup != hwnd) _ = post(popup, CloseMessage, 0, 0);

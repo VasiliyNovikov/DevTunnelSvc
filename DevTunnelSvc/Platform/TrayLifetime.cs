@@ -5,12 +5,13 @@ internal sealed class TrayLifetime : IDisposable
     private readonly TaskCompletionSource<Exception?> stopped = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private readonly IDisposable? tray;
 
-    internal static Func<Action<Exception?>, IDisposable>? ForCurrentPlatform => OperatingSystem.IsWindows() ? CreateWindowsTray : null;
+    internal static Func<string, Action<Exception?>, IDisposable>? ForCurrentPlatform => OperatingSystem.IsWindows() ? CreateWindowsTray : null;
 
     [System.Runtime.Versioning.SupportedOSPlatform("windows")]
-    private static TrayIcon CreateWindowsTray(Action<Exception?> stopService) => new(stopService);
+    private static TrayIcon CreateWindowsTray(string pipeName, Action<Exception?> stopService) => new(pipeName, stopService);
 
-    internal TrayLifetime(Func<Action<Exception?>, IDisposable>? create) => tray = create?.Invoke(e => stopped.TrySetResult(e));
+    internal TrayLifetime(string pipeName, Func<string, Action<Exception?>, IDisposable>? create) =>
+        tray = create?.Invoke(pipeName, e => stopped.TrySetResult(e));
 
     internal async Task WaitAsync(Task server, CancellationTokenSource lifetime)
     {

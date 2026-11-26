@@ -93,7 +93,7 @@ If upgrading from a memory-only build, stop the old service before replacing the
 
 `status` lists this service's mapping names and SDK connection states; `list` queries your account's tunnels instead. `stop NAME` removes one mapping. `delete TUNNEL` deletes the cloud tunnel explicitly; stopping a mapping does not. V1 supports one hosted mapping per tunnel at a time. Mappings are still in memory: after a restart reissue `host` or `connect`, not `login`.
 
-<img src="DevTunnelSvc/Assets/devtunnelsvc.png" width="32" height="32" alt="Teal tunnel and outbound arrow"> On Windows, right-click the notification-area icon for **Update**, **About**, or **Exit**. The menu and About dialog follow the Windows app theme and respect high contrast; older Windows versions use the native menu colors. **About** shows the running version. **Exit** stops the service and its mappings without signing you out or removing its startup registration.
+<img src="DevTunnelSvc/Assets/devtunnelsvc.png" width="32" height="32" alt="Teal tunnel and outbound arrow"> On Windows, right-click the notification-area icon for **Status**, **Update**, **About**, or **Exit**. **Status** shows the same sign-in state and active mappings as `devtunnelsvc status`. **About** shows the running version. Both dialogs and the menu follow the Windows app theme and respect high contrast; older Windows versions use the native menu colors. **Exit** stops the service and its mappings without signing you out or removing its startup registration.
 
 ```shell
 devtunnelsvc update --check
