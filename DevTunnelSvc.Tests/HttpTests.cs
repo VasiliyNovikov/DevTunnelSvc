@@ -465,6 +465,76 @@ public sealed class HttpTests
     }
 
     [TestMethod]
+    public async Task ChangedReleaseIsRejectedBeforeTheWorkerStopsTheService()
+    {
+        using var http = new HttpClient(new HttpStub((r, _) =>
+        {
+            Assert.AreEqual("api.github.com", r.RequestUri!.Host);
+            return Task.FromResult(HttpStub.Json("""{"tag_name":"v3.0.0","assets":[]}"""));
+        }));
+        var updater = new ReleaseUpdate(http, new((_, _) => throw new AssertFailedException(), () => throw new AssertFailedException()));
+        var failure = await Assert.ThrowsExactlyAsync<InvalidOperationException>(() => updater.RunAsync("1.0.0", "unused", false,
+            () => throw new AssertFailedException(), CancellationToken.None, "v2.0.0"));
+        Assert.Contains("latest release changed", failure.Message);
+    }
+
+    [TestMethod]
+    [DataRow(true, true)]
+    [DataRow(true, false)]
+    [DataRow(false, true)]
+    public async Task CopiedCliInstallsOnlyAtTheOriginalPathAndRestartsOnlyForForce(bool force, bool validDigest)
+    {
+        var root = Directory.CreateTempSubdirectory("devtunnel-copied-cli-");
+        using var limit = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        var pipe = $"devtunnel-copy-{Guid.NewGuid():N}";
+        var installed = Path.Combine(root.FullName, "installed");
+        var copy = Path.Combine(root.CreateSubdirectory($".devtunnelsvc-update-{Guid.NewGuid():N}").FullName, "installed");
+        var state = root.CreateSubdirectory("state").FullName;
+        var replacement = "verified image"u8.ToArray();
+        var name = ReleaseUpdate.AssetName(OperatingSystem.IsWindows(), System.Runtime.InteropServices.RuntimeInformation.ProcessArchitecture);
+        var asset = OperatingSystem.IsWindows() ? Zip("devtunnelsvc.exe", replacement) : replacement;
+        var digest = validDigest ? $"sha256:{Convert.ToHexString(SHA256.HashData(asset))}" : "sha256:invalid";
+        using var http = new HttpClient(new HttpStub((r, _) => Task.FromResult(r.RequestUri!.Host == "api.github.com"
+            ? HttpStub.Json(JsonSerializer.Serialize(new { tag_name = "v2.0.0", assets = new[] { new { name, size = asset.Length, digest } } }))
+            : new HttpResponseMessage(HttpStatusCode.OK) { Content = new ByteArrayContent(asset) })));
+        var server = force ? ServiceLifetime.RunAsync(TextWriter.Null, pipe, state, limit.Token) : Task.CompletedTask;
+        try
+        {
+            File.WriteAllText(installed, "original");
+            File.Copy(installed, copy);
+            List<string> commands = [];
+            Task<int> Run(ProcessStartInfo info, CancellationToken t)
+            {
+                Assert.AreEqual(installed, info.FileName, "Never start a service from the disposable copy.");
+                Assert.IsTrue(info.CreateNoWindow && info.RedirectStandardOutput && t.CanBeCanceled);
+                using var free = InstanceLease.Acquire(state);
+                commands.Add(string.Join(' ', info.ArgumentList));
+                return Task.FromResult(0);
+            }
+            var parent = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var flow = new CliUpdate(http, "1.0.0", () => new(copy, state, pipe, Run, () => parent.Task));
+            Task<string> Apply() => flow.RunAsync(new(false, force, "v2.0.0"), limit.Token);
+            if (validDigest) Assert.Contains(force ? "restarted" : "Run 'service start'", await Apply());
+            else Assert.Contains("SHA-256", (await Assert.ThrowsExactlyAsync<InvalidOperationException>(Apply)).Message);
+            Assert.AreEqual("original", File.ReadAllText(copy));
+            Assert.AreEqual(validDigest ? "verified image" : "original", File.ReadAllText(installed));
+            Assert.AreEqual(force ? "service start,status" : "", string.Join(',', commands));
+            var log = File.ReadAllText(Path.Combine(state, "update.log"));
+            if (force)
+            {
+                Assert.Contains($"Stopping service PID {Environment.ProcessId}", log);
+                Assert.Contains("Installing verified release", log);
+                Assert.Contains("Launching installed service start", log);
+                Assert.Contains("service start exit code: 0", log);
+                Assert.Contains("status exit code: 0", log);
+                Assert.Contains(validDigest ? "Installed v2.0.0." : "Install failed: InvalidDataException", log);
+            }
+            else Assert.DoesNotContain("Stopping", log);
+        }
+        finally { await limit.CancelAsync(); await server; root.Delete(true); }
+    }
+
+    [TestMethod]
     public async Task ForceCannotStopAnInvalidOrReplacedServiceOrIgnoreCancellation()
     {
         using var cancel = new CancellationTokenSource();

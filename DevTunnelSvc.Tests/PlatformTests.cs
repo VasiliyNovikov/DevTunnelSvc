@@ -106,8 +106,8 @@ public sealed class PlatformTests
         Assert.IsNotNull(launched);
         Assert.AreEqual(exe, launched.FileName);
         Assert.AreEqual("service run", string.Join(' ', launched.ArgumentList));
-        Assert.IsFalse(launched.UseShellExecute);
-        Assert.IsTrue(launched.CreateNoWindow);
+        Assert.IsTrue(launched.UseShellExecute);
+        Assert.AreEqual(ProcessWindowStyle.Hidden, launched.WindowStyle);
         var unit = "";
         await ServiceLifetime.LaunchAsync(null, _ => throw new AssertFailedException(), (args, _) =>
         {

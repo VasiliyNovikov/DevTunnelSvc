@@ -40,6 +40,8 @@ The Windows tray loads its small icon from the executable's `ApplicationIcon` re
 
 Tray updates run in a separate process. Both the tray and `update --force` must check for a newer stable release first, stop only the service instance they identified, wait for its lease, use the same verified installer as plain `update`, and start the service from the installed path even after an install failure. The tray asks before stopping its service. `update --force` never prompts, so it can run unattended, and it also starts a service that was stopped. Never reinstall the same version, and never stop or start a service for `--check` or when already up to date.
 
+Run installation and restart from a private copy of the current single-file executable. The .NET bundle loader can reopen its original path to load framework assemblies lazily; replacing that file under a running updater can break even a process-exit callback. The calling CLI waits synchronously for its worker. Keep update diagnostics bounded and free of credentials and mapping data. Run `.\eng\test-update.ps1` in PowerShell 7 on Windows to exercise `update --force` offline across two different published bundle layouts, an invalid asset digest, and a failed service start.
+
 To publish, tag the intended commit (for example `git tag -a v1.2.3 -m "Release v1.2.3"`) and push **that tag** (`git push origin v1.2.3`). CI stamps the version without `v` into each executable. Only a tag push can create a GitHub Release, and only after the Windows/Linux x64 and Arm64 packages, tests, and quality gates pass. CI uploads the already smoke-tested assets without rebuilding and generates release notes. A tag such as `v1.2.3-rc.1` creates a prerelease, not the latest stable release.
 
 ## Build and test

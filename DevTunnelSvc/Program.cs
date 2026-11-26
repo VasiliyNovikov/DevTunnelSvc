@@ -51,27 +51,18 @@ internal static class Program
 
         try { return await new Commands(output, error, send, actions).InvokeAsync(args); }
         catch (OperationCanceledException) { error.WriteLine("Operation cancelled or timed out."); return 1; }
-        catch (Exception ex) { error.WriteLine(ex.Message); return 1; }
+        catch (Exception ex) { error.WriteLine(UpdateLog.Detail(ex)); return 1; }
     }
 
     internal static Task<GitHubCredential> LoginAsync(TextWriter output, LoginOptions options, CancellationToken ct) =>
         new DeviceLogin(Http, Task.Delay, options.OpenBrowser ? LoginBrowser.OpenAsync : null,
             options.CopyToClipboard ? LoginClipboard.TryCopyAsync : null).SignInAsync(output, ct);
 
-    internal static Task<string> UpdateAsync(UpdateOptions options, CancellationToken ct)
-    {
-        var executable = options.CheckOnly ? string.Empty : ServiceLifetime.ApplicationExecutable();
-        var handoff = options.Force ? new UpdateHandoff((request, t) =>
-            { RequireSingleFileUpdate(); return Control.SendAsync(request, Control.PipeName, t); },
-            () => UpdateHandoff.StartInstalledAsync(executable, ServiceLifetime.ExitCodeAsync)) : null;
-        return new ReleaseUpdate(Http, handoff).RunAsync(Version, executable, options.CheckOnly, GetUpdateLease, ct);
-    }
-
-    private static IDisposable GetUpdateLease()
+    internal static Task<string> UpdateAsync(UpdateOptions options, CancellationToken ct) => new CliUpdate(Http, Version, () =>
     {
         RequireSingleFileUpdate();
-        return InstanceLease.Acquire(InstanceLease.DefaultDirectory);
-    }
+        return new(ServiceLifetime.ApplicationExecutable(), InstanceLease.DefaultDirectory, Control.PipeName, ServiceLifetime.ExitCodeAsync, UpdateWorker.ParentClosed);
+    }).RunAsync(options, ct);
 
     [System.Diagnostics.CodeAnalysis.UnconditionalSuppressMessage("SingleFile", "IL3000", Justification = "An empty Location identifies the supported single-file installation.")]
     internal static void RequireSingleFileUpdate()

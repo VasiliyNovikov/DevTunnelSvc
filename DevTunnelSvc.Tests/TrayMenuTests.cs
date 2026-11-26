@@ -197,9 +197,23 @@ public sealed class TrayMenuTests
         }
         await UpdateHandoff.StartInstalledAsync(installed, Start);
         Assert.AreEqual(expected, string.Join(',', commands));
-        var failure = await Assert.ThrowsExactlyAsync<InvalidOperationException>(() => UpdateHandoff.StartInstalledAsync(installed,
-            (info, _) => Task.FromResult(info.ArgumentList[0] == "status" ? 29 : 0)));
-        Assert.Contains("'status' command exited with code 29", failure.Message);
+    }
+
+    [TestMethod]
+    [DataRow(true, "service start", "service start,service start")]
+    [DataRow(false, "status", "service start,status,service start,status")]
+    public async Task FailedRestartReportsWhetherTheStarterOrTheIndependentProbeFailed(bool failStart, string failedCommand, string expected)
+    {
+        List<string> commands = [];
+        Task<int> Run(ProcessStartInfo info, CancellationToken _)
+        {
+            var command = string.Join(' ', info.ArgumentList);
+            commands.Add(command);
+            return Task.FromResult(failStart || command == "status" ? 29 : 0);
+        }
+        var failure = await Assert.ThrowsExactlyAsync<InvalidOperationException>(() => UpdateHandoff.StartInstalledAsync("installed", Run));
+        Assert.Contains($"'{failedCommand}' command exited with code 29", failure.Message);
+        Assert.AreEqual(expected, string.Join(',', commands));
     }
 
     [TestMethod]

@@ -4,11 +4,12 @@ using DevTunnelSvc.Auth;
 using DevTunnelSvc.Platform;
 using DevTunnelSvc.Service;
 using DevTunnelSvc.Tunnels;
+using DevTunnelSvc.Updates;
 
 namespace DevTunnelSvc;
 
 internal readonly record struct LoginOptions(bool OpenBrowser, bool CopyToClipboard);
-internal readonly record struct UpdateOptions(bool CheckOnly, bool Force);
+internal readonly record struct UpdateOptions(bool CheckOnly, bool Force, string? WorkerTag = null);
 
 internal sealed record LocalActions(
     Func<TextWriter, LoginOptions, CancellationToken, Task<GitHubCredential>> Login,
@@ -54,12 +55,21 @@ internal sealed class Commands(TextWriter output, TextWriter error, Func<Request
     }
 
     [SupportedOSPlatform("windows")]
-    private static Command TrayUpdateCommand()
+    private Command TrayUpdateCommand()
     {
         var pid = new Argument<int>("service-pid");
         var command = new Command(TrayMenu.UpdateWorker) { Hidden = true };
+        var tag = new Option<string?>(UpdateWorker.TagOption) { Hidden = true };
         command.Arguments.Add(pid);
-        command.SetAction((r, ct) => TrayUpdate.FromMenuAsync(r.GetRequiredValue(pid), ct));
+        command.Options.Add(tag);
+        command.SetAction(async (r, ct) =>
+        {
+            var servicePid = r.GetRequiredValue(pid);
+            if (r.GetValue(tag) is not { } expected) return await TrayUpdate.FromMenuAsync(servicePid, ct);
+            var message = await TrayUpdate.FromCopyAsync(servicePid, expected, ct);
+            if (message is not null) output.WriteLine(message);
+            return 0;
+        });
         return command;
     }
 
@@ -67,9 +77,11 @@ internal sealed class Commands(TextWriter output, TextWriter error, Func<Request
     {
         var check = new Option<bool>("--check") { Description = "Check for a newer release without installing it or stopping the service." };
         var force = new Option<bool>("--force") { Description = "Without asking, stop a running service and its mappings, install a newer release, and start the service, even if it was stopped." };
-        var command = Action("update", (r, ct) => localActions.Update(new(r.GetValue(check), r.GetValue(force)), ct));
+        var tag = new Option<string?>(UpdateWorker.TagOption) { Hidden = true };
+        var command = Action("update", (r, ct) => localActions.Update(new(r.GetValue(check), r.GetValue(force), r.GetValue(tag)), ct));
         command.Options.Add(check);
         command.Options.Add(force);
+        command.Options.Add(tag);
         return command;
     }
 

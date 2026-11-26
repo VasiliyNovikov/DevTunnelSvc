@@ -54,8 +54,9 @@ internal static class ServiceLifetime
     {
         if (windowsExe is null)
             return systemctl(["start", Unit], ct);
-        // The tray owns a message pump in this user's desktop session, not a console in the starter's lifetime.
-        start(new ProcessStartInfo(windowsExe, ["service", "run"]) { CreateNoWindow = true });
+        // Give the service a separate hidden console. Inheriting the starter's redirected handles
+        // keeps the update worker's output pipes open even after the starter has exited.
+        start(new ProcessStartInfo(windowsExe, ["service", "run"]) { UseShellExecute = true, WindowStyle = ProcessWindowStyle.Hidden });
         return Task.CompletedTask;
     }
 

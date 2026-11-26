@@ -19,13 +19,25 @@ internal sealed class ReleaseUpdate(HttpClient http, UpdateHandoff? force = null
     private const int MaxBytes = 256 * 1024 * 1024;
     private static readonly Uri Latest = new($"https://api.github.com/repos/{Repo}/releases/latest");
 
-    public async Task<string> RunAsync(string current, string executable, bool checkOnly, Func<IDisposable> acquireUpdateLease, CancellationToken ct)
+    public async Task<string> CheckAsync(string current, bool checkOnly, Func<ReleaseInfo, CancellationToken, Task<string>> apply, CancellationToken ct)
     {
         var release = await FindNewerAsync(current, ct);
         if (release is null)
             return $"Already up to date ({current}).";
         if (checkOnly)
             return $"Available: {release.TagName} (installed: {current}).";
+        return await apply(release, ct);
+    }
+
+    internal Task<string> RunAsync(string current, string executable, bool checkOnly, Func<IDisposable> acquireUpdateLease, CancellationToken ct,
+        string? expectedTag = null) => CheckAsync(current, checkOnly, (release, t) =>
+    {
+        if (expectedTag is not null) UpdateWorker.RequireTag(expectedTag, release.TagName);
+        return InstallReleaseAsync(release, executable, acquireUpdateLease, t);
+    }, ct);
+
+    private async Task<string> InstallReleaseAsync(ReleaseInfo release, string executable, Func<IDisposable> acquireUpdateLease, CancellationToken ct)
+    {
         if (force is not null)
             return await force.ApplyAsync(release.TagName, async token =>
             {

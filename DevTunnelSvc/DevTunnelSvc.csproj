@@ -25,6 +25,7 @@
     <PackageReference Include="System.Security.Cryptography.ProtectedData" />
     <AdditionalFiles Include="CodeMetricsConfig.txt" />
     <InternalsVisibleTo Include="DevTunnelSvc.Tests" />
+    <InternalsVisibleTo Include="DevTunnelSvc.UpdateSmoke" />
   </ItemGroup>
 
 </Project>

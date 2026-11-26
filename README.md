@@ -106,6 +106,8 @@ On both platforms, `update --check` only reports availability. `update --force` 
 
 Plain `update` never stops a running service. To control downtime yourself, run `devtunnelsvc service stop`, `devtunnelsvc update`, then `devtunnelsvc service start`. `service run` runs in the foreground for diagnostics. Linux requires a running systemd user manager for `install` and `start`. To keep the service running after the last login session ends, configure user lingering according to your system policy.
 
+If an update reports **Installed** but the service did not restart, run `devtunnelsvc service start`; there is no need to reinstall. The updater records the latest update attempt in `%LOCALAPPDATA%\DevTunnelSvc\update.log` on Windows or `$XDG_DATA_HOME/DevTunnelSvc/update.log` on Linux (normally `~/.local/share/DevTunnelSvc/update.log`). The log contains timestamps, update stages, process IDs and error or exit codes, not credentials, tunnel routes, or raw command output. Versions through v0.1.7 did not write this log; the **old** executable performs the upgrade.
+
 To uninstall, run `devtunnelsvc logout` to remove the credential, then stop the service. On Windows remove the `DevTunnelSvc` value from `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`. On Linux run `systemctl --user disable devtunnelsvc.service`, remove `devtunnelsvc.service` from your systemd user configuration directory, and run `systemctl --user daemon-reload`. Then remove the downloaded executable.
 
 For design requirements, coding guidelines, build commands, and release publishing, see [AGENTS.md](AGENTS.md).

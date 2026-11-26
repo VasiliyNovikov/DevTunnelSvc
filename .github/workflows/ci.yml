@@ -71,6 +71,10 @@ jobs:
           } else {
             dotnet eng/release.cs
           }
+      - name: Exercise offline self-update across published single-file bundles
+        if: matrix.rid == 'win-x64'
+        shell: pwsh
+        run: .\eng\test-update.ps1
       - uses: actions/upload-artifact@v7
         with:
           name: package-${{ matrix.rid }}
