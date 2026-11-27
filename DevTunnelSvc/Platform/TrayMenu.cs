@@ -68,12 +68,15 @@ internal sealed class TrayMenu(string pipeName, Action exit, TrayQueries queries
     {
         try { await action(); }
         catch (OperationCanceledException) when (ct.IsCancellationRequested) { /* The tray is closing. */ }
-        catch (Exception ex) when (ex is Win32Exception or IOException or HttpRequestException or InvalidOperationException or InvalidDataException or JsonException or UnauthorizedAccessException or OperationCanceledException)
+        catch (Exception ex) when (IsMenuFailure(ex))
         {
             writeEvent($"Tray menu failed: {AppLog.ErrorCode(ex)}");
             if (!ct.IsCancellationRequested) show(new("DevTunnelSvc", AppLog.Detail(ex), Scrollable: true));
         }
     }
+
+    private static bool IsMenuFailure(Exception ex) => ex is Win32Exception or IOException or HttpRequestException or
+        InvalidOperationException or InvalidDataException or JsonException or UnauthorizedAccessException or OperationCanceledException;
 
     private async Task CheckOrUpdateAsync(string? selectedTag, CancellationToken ct)
     {

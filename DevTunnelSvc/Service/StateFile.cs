@@ -23,6 +23,14 @@ internal static class StateFile
             throw new IOException("Refusing to follow a link in the DevTunnelSvc state directory.");
     }
 
+    internal static FileStream OpenSnapshot(string path) => new(path, FileMode.Open, FileAccess.Read, FileShare.Read | FileShare.Delete);
+
+    internal static void RequirePrivateFile(FileStream file, string permissionError)
+    {
+        if (!OperatingSystem.IsWindows() && File.GetUnixFileMode(file.SafeFileHandle) != OwnerFile)
+            throw new UnauthorizedAccessException(permissionError);
+    }
+
     internal static void WriteAtomically(string path, byte[] bytes)
     {
         // The service lease serializes writers. Never follow a leftover staging file.

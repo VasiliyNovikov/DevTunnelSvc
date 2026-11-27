@@ -85,6 +85,8 @@ Run the same checks as CI from the repository root. No global .NET tools are req
 ```shell
 dotnet eng/quality.cs coverage
 dotnet eng/metrics.cs
+dotnet eng/duplication.cs
+dotnet eng/test-duplication.cs
 dotnet eng/quality.cs mutation
 dotnet format whitespace DevTunnelSvc.slnx --no-restore --verify-no-changes
 ```
@@ -94,8 +96,11 @@ dotnet format whitespace DevTunnelSvc.slnx --no-restore --verify-no-changes
 | Coverage | At least 80% line **and** 80% branch coverage in the production assembly. Exclude only the framework generators' JSON serializers and native interop stubs, not the handwritten service or platform code. |
 | CRAP (complexity vs. coverage) | No method scores above 25: total CRAP load is zero. Coverage must match production methods. |
 | Mutation | Stryker score at least 80%. Each file with valid mutants needs a kill; an empty run fails. |
+| Duplication | No repeated non-overlapping sequence of 25 or more identical C# tokens, within or across files. The check includes production, Windows code, tests, and `eng/` tools. |
 | Maintainability | Production builds cap method complexity at 10, inheritance depth at 4, and type coupling at 54. Method maintainability index must be at least 48. CI also caps declared methods at 46 source lines and 28 executable lines. |
 
-CI measures these gates on Ubuntu x64. Inspect `artifacts/coverage/` for Cobertura XML and CRAP JSON, `artifacts/metrics/report.json` for per-symbol measurements, and `artifacts/mutation/reports/` for Stryker HTML and JSON. GitHub Actions uploads these as `code-quality` and `mutation`.
+The [AuthBridge duplication rule](https://github.com/VasiliyNovikov/AuthBridge/blob/e06413cd564f62da46bf656a0365dd679fac2763/duplication.cs) uses Roslyn with `WINDOWS` defined. Using directives, comments, and whitespace do not count; identifiers and literals must match exactly. Hidden directories and build/test outputs are skipped. Extract shared behavior rather than adding exclusions or raising the threshold.
+
+CI measures these gates on Ubuntu x64. Inspect `artifacts/coverage/` for Cobertura XML and CRAP JSON, `artifacts/metrics/report.json` for per-symbol measurements, `artifacts/duplication/report.json` for the file and line range of every copy, and `artifacts/mutation/reports/` for Stryker HTML and JSON. GitHub Actions uploads these as `code-quality` and `mutation`.
 
 The coding conventions and gates adapt [AuthBridge's contributor guidelines](https://github.com/VasiliyNovikov/AuthBridge/blob/f2b94d2a5aec4db6fd622a4b134941e40273b319/AGENTS.md) to DevTunnelSvc.

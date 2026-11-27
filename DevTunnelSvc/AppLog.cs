@@ -37,8 +37,7 @@ internal sealed class AppLog(string directory, string source, Action<string> war
         using var writer = AcquireWriter();
         StateFile.RejectLink(FilePath);
         using var file = Open(FilePath, FileShare.Read | FileShare.Delete);
-        if (!OperatingSystem.IsWindows() && File.GetUnixFileMode(file.SafeFileHandle) != StateFile.OwnerFile)
-            throw new UnauthorizedAccessException("The application log must have mode 0600.");
+        StateFile.RequirePrivateFile(file, "The application log must have mode 0600.");
         var text = message[..Math.Min(message.Length, 1024)].ReplaceLineEndings(" ");
         var bytes = Encoding.UTF8.GetBytes(string.Create(CultureInfo.InvariantCulture, $"{DateTimeOffset.UtcNow:O} [{Environment.ProcessId}] [{source}] {text}\n"));
         if (file.Length + bytes.Length > MaxBytes) Rotate(file);

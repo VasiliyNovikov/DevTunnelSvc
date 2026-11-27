@@ -65,7 +65,7 @@ public sealed class PlatformTests
         try
         {
             var missing = new ProcessStartInfo(Path.Combine(dir.FullName, "missing"));
-            var rejected = OperatingSystem.IsWindows() ? new ProcessStartInfo("cmd.exe", ["/d", "/c", "exit", "/b", "7"]) : new ProcessStartInfo("/bin/false");
+            var rejected = ExitWithSeven();
             var capture = OperatingSystem.IsWindows()
                 ? new ProcessStartInfo("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command",
                     "[Console]::Out.Write('o'*262144); [Console]::Error.Write('e'*262144); " +
@@ -147,13 +147,16 @@ public sealed class PlatformTests
         Assert.IsTrue(windows.StartDetached);
         Assert.AreEqual("__auto-update,42", string.Join(',', windows.ArgumentList));
 
-        var rejected = OperatingSystem.IsWindows() ? new ProcessStartInfo("cmd.exe", ["/d", "/c", "exit", "/b", "7"]) : new ProcessStartInfo("/bin/sh", ["-c", "exit 7"]);
+        var rejected = ExitWithSeven();
         using var limit = new CancellationTokenSource(TimeSpan.FromSeconds(5));
         var error = await Assert.ThrowsExactlyAsync<InvalidOperationException>(() => AutoUpdateLauncher.LaunchAsync(rejected, limit.Token));
         Assert.Contains("exit 7", error.Message);
         await limit.CancelAsync();
         await Assert.ThrowsAsync<OperationCanceledException>(() => AutoUpdateLauncher.LaunchAsync(windows, limit.Token));
     }
+
+    internal static ProcessStartInfo ExitWithSeven() => OperatingSystem.IsWindows()
+        ? new("cmd.exe", ["/d", "/c", "exit", "/b", "7"]) : new("/bin/sh", ["-c", "exit 7"]);
 
     [TestMethod]
     public void RegistrationCannotAccidentallyTargetTheDotnetHost()

@@ -38,7 +38,7 @@ public sealed class UpdateWorkerTests
         try
         {
             var installed = Path.Combine(root.FullName, "installed");
-            var worker = Path.Combine(root.CreateSubdirectory($".devtunnelsvc-update-{Guid.NewGuid():N}").FullName, "installed");
+            var worker = WorkerPath(root);
             File.WriteAllText(installed, "original");
             File.Copy(installed, worker);
             Assert.Contains("private copy", Assert.ThrowsExactly<InvalidOperationException>(() => UpdateWorker.InstalledPath(installed)).Message);
@@ -61,7 +61,7 @@ public sealed class UpdateWorkerTests
     [TestMethod]
     public async Task ChecksAndCurrentInstallsDoNotResolveOrStageAnInstallation()
     {
-        using var http = new HttpClient(new HttpStub((_, _) => Task.FromResult(HttpStub.Json("""{"tag_name":"v2.0.0","assets":[]}"""))));
+        using var http = OfferV2();
         var update = new CliUpdate(http, "1.0.0", () => throw new AssertFailedException());
         Assert.Contains("Available: v2.0.0", await update.RunAsync(new(true, true), CancellationToken.None));
         var current = new CliUpdate(http, "2.0.0", () => throw new AssertFailedException());
@@ -81,7 +81,7 @@ public sealed class UpdateWorkerTests
             var exe = Path.Combine(root.FullName, "fake-cli");
             await File.WriteAllTextAsync(exe, "#!/bin/sh\nprintf '%s\\n' \"$0\" \"$*\"\n");
             File.SetUnixFileMode(exe, (UnixFileMode)0x1c0);
-            using var http = new HttpClient(new HttpStub((_, _) => Task.FromResult(HttpStub.Json("""{"tag_name":"v2.0.0","assets":[]}"""))));
+            using var http = OfferV2();
             var update = new CliUpdate(http, "1.0.0", () => new(exe, root.FullName, "unused", (_, _) => throw new AssertFailedException(),
                 () => throw new AssertFailedException()));
             var result = (await update.RunAsync(new(false, force, AutoServicePid: pid), CancellationToken.None)).Split('\n');
@@ -104,6 +104,11 @@ public sealed class UpdateWorkerTests
         }
         finally { root.Delete(true); }
     }
+
+    private static HttpClient OfferV2() => HttpStub.ReleaseMetadata(() => """{"tag_name":"v2.0.0","assets":[]}""");
+
+    internal static string WorkerPath(DirectoryInfo installation) =>
+        Path.Combine(installation.CreateSubdirectory($".devtunnelsvc-update-{Guid.NewGuid():N}").FullName, "installed");
 
     [TestMethod]
     public async Task LosingTheCallerCancelsWorkButWaitsForRestartBeforeReturning()

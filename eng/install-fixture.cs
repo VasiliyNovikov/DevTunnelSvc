@@ -1,5 +1,7 @@
+#!/usr/bin/env dotnet
 #:property PublishAot=false
 #:property PublishSingleFile=true
+#:include FixtureFiles.cs
 var root = Environment.GetEnvironmentVariable("DEVTUNNELSVC_INSTALL_FIXTURE") ?? throw new InvalidOperationException("Missing installer fixture.");
 var arch = Path.GetFileName(root);
 var home = Path.Combine(root, "user home");
@@ -38,7 +40,7 @@ var pathComparison = OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnor
 if (!image.StartsWith(home + Path.DirectorySeparatorChar, pathComparison)) throw new InvalidOperationException("Ran a CLI from PATH instead of the download.");
 File.AppendAllText(Path.Combine(root, "calls"), string.Join(' ', args) + "\n");
 if (args is ["--version"]) { Console.WriteLine("1.2.3"); return 0; }
-var target = OperatingSystem.IsWindows() ? Path.Combine(home, "Programs", "DevTunnelSvc", "devtunnelsvc.exe") : Path.Combine(home, ".local", "bin", "devtunnelsvc");
+var target = FixtureFiles.InstalledCli(home);
 if (!string.Equals(image, target, pathComparison))
     throw new InvalidOperationException("Did not run the CLI from the isolated install directory.");
 switch (args)

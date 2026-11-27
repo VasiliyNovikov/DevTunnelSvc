@@ -4,7 +4,7 @@ RUN dnf install -y dotnet-sdk-11.0 && dnf clean all
 WORKDIR /src
 COPY Directory.Build.props Directory.Packages.props ./
 COPY DevTunnelSvc/ DevTunnelSvc/
-COPY eng/release.cs eng/
+COPY eng/release.cs eng/Repository.cs eng/
 ARG VERSION
 # Do not leave a compiler server attached to the container's build step.
 RUN --mount=type=secret,id=nuget-config,target=/root/.nuget/NuGet/NuGet.Config \

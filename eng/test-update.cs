@@ -1,10 +1,12 @@
+#!/usr/bin/env dotnet
 #:property PublishAot=false
+#:include FixtureFiles.cs
 using System.Diagnostics;
 using System.Globalization;
 using System.IO.Compression;
 using System.Runtime.InteropServices;
-using System.Security.Cryptography;
 using System.Text.Json;
+using static FixtureFiles;
 
 if (!OperatingSystem.IsWindows() || RuntimeInformation.ProcessArchitecture is not (Architecture.X64 or Architecture.Arm64))
 {
@@ -134,12 +136,6 @@ static void WaitForAutomaticUpdate(string state, DirectoryInfo installation)
         Thread.Sleep(150);
     }
     throw new TimeoutException($"The isolated automatic updater did not finish:\n{log}");
-}
-
-static string HashFile(string path)
-{
-    using var file = File.OpenRead(path);
-    return Convert.ToHexString(SHA256.HashData(file));
 }
 
 static void Expect(string actual, params string[] fragments)

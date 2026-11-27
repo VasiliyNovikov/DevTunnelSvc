@@ -1,3 +1,4 @@
+using System.Collections.Specialized;
 using System.Diagnostics;
 using System.IO.Compression;
 using System.Net;
@@ -15,7 +16,23 @@ namespace DevTunnelSvc.Tests;
 internal sealed class HttpStub(Func<HttpRequestMessage, CancellationToken, Task<HttpResponseMessage>> send) : HttpClientHandler
 {
     protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct) => send(request, ct);
-    internal static HttpResponseMessage Json(string json) => new(HttpStatusCode.OK) { Content = new StringContent(json, Encoding.UTF8, "application/json") };
+    internal static HttpResponseMessage Json(string json, HttpStatusCode status = HttpStatusCode.OK) =>
+        new(status) { Content = new StringContent(json, Encoding.UTF8, "application/json") };
+    internal static HttpClient Respond(Func<HttpRequestMessage, HttpResponseMessage> respond) =>
+        new(new HttpStub((request, _) => Task.FromResult(respond(request))));
+    internal static HttpClient ReleaseMetadata(Func<string> metadata) => Respond(request =>
+    {
+        Assert.AreEqual("api.github.com", request.RequestUri!.Host, "No asset should be downloaded.");
+        return Json(metadata());
+    });
+
+    internal static async Task<NameValueCollection> GitHubFormAsync(HttpRequestMessage request, CancellationToken ct)
+    {
+        Assert.AreEqual(HttpMethod.Post, request.Method);
+        var fields = System.Web.HttpUtility.ParseQueryString(await request.Content!.ReadAsStringAsync(ct));
+        Assert.AreEqual(Microsoft.DevTunnels.Contracts.TunnelServiceProperties.Production.GitHubAppClientId, fields["client_id"]);
+        return fields;
+    }
 }
 
 [TestClass]
@@ -31,12 +48,9 @@ public sealed class HttpTests
             """{"access_token":"private-token","expires_in":28800,"refresh_token":"private-refresh","refresh_token_expires_in":15897600}"""]);
         using var http = new HttpClient(new HttpStub(async (r, ct) =>
         {
-            Assert.AreEqual(HttpMethod.Post, r.Method);
+            var form = await HttpStub.GitHubFormAsync(r, ct);
             Assert.AreEqual("github.com", r.RequestUri!.Host);
             Assert.AreEqual("application/json", r.Headers.Accept.Single().MediaType);
-            var body = await r.Content!.ReadAsStringAsync(ct);
-            var form = System.Web.HttpUtility.ParseQueryString(body);
-            Assert.AreEqual(Microsoft.DevTunnels.Contracts.TunnelServiceProperties.Production.GitHubAppClientId, form["client_id"]);
             if (r.RequestUri.AbsolutePath.EndsWith("/access_token", StringComparison.Ordinal))
             {
                 Assert.AreEqual("private-code", form["device_code"]);
@@ -73,9 +87,7 @@ public sealed class HttpTests
         Assert.IsTrue(signIn.ExpiresAt >= before.AddHours(8) && signIn.ExpiresAt <= DateTimeOffset.UtcNow.AddHours(8));
         Assert.IsTrue(signIn.RefreshExpiresAt >= before.AddSeconds(15897600) && signIn.RefreshExpiresAt <= DateTimeOffset.UtcNow.AddSeconds(15897600));
         Assert.IsTrue(browserWait.IsCancellationRequested, "Login must finish without waiting for the user to close the browser.");
-        Assert.Contains("https://github.com/login/device", output.ToString());
-        Assert.Contains("ABCD-1234", output.ToString());
-        Assert.DoesNotContain("private", output.ToString());
+        AssertManualLogin(output);
         Assert.HasCount(1, clipboardWrites);
         CollectionAssert.AreEqual(new double[] { 2, 2, 7 }, delays);
     }
@@ -85,35 +97,39 @@ public sealed class HttpTests
     [DataRow(true)]
     public async Task UnavailableOrFailingBrowserLeavesManualLoginUsable(bool missingLauncher)
     {
-        using var http = new HttpClient(new HttpStub((r, _) => Task.FromResult(HttpStub.Json(
-            r.RequestUri!.AbsolutePath.EndsWith("/code", StringComparison.Ordinal)
-                ? """{"device_code":"private-code","user_code":"ABCD-1234","expires_in":900}"""
-                : """{"access_token":"private-token"}"""))));
+        using var http = DeviceFlow("""{"device_code":"private-code","user_code":"ABCD-1234","expires_in":900}""", """{"access_token":"private-token"}""");
         using var output = new StringWriter();
         using var limit = new CancellationTokenSource(TimeSpan.FromSeconds(10));
         var attempted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var oauth = new DeviceLogin(http, (_, ct) => attempted.Task.WaitAsync(ct), async (_, ct) =>
         {
             var launcher = missingLauncher ? new ProcessStartInfo(Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N")))
-                : OperatingSystem.IsWindows() ? new ProcessStartInfo("cmd.exe", ["/d", "/c", "exit", "/b", "7"]) : new ProcessStartInfo("/bin/false");
+                : PlatformTests.ExitWithSeven();
             try { await LoginBrowser.LaunchAsync(launcher, ct); }
             finally { attempted.SetResult(); }
         });
         Assert.AreEqual(new GitHubCredential("private-token"), await oauth.SignInAsync(output, limit.Token));
-        Assert.Contains("https://github.com/login/device", output.ToString());
-        Assert.Contains("ABCD-1234", output.ToString());
+        AssertManualLogin(output);
         Assert.Contains("Could not open the browser", output.ToString());
-        Assert.DoesNotContain("private", output.ToString());
     }
+
+    private static void AssertManualLogin(StringWriter output)
+    {
+        var text = output.ToString();
+        Assert.Contains("https://github.com/login/device", text);
+        Assert.Contains("ABCD-1234", text);
+        Assert.DoesNotContain("private", text);
+    }
+
+    private static HttpClient DeviceFlow(string code, string token) =>
+        HttpStub.Respond(r => HttpStub.Json(r.RequestUri!.AbsolutePath.EndsWith("/code", StringComparison.Ordinal) ? code : token));
 
     [TestMethod]
     [DataRow("""{"error":"access_denied"}""")]
     [DataRow("""{"error":"expired_token"}""")]
     public async Task LoginFailsOnDenialOrExpiry(string reply)
     {
-        using var http = new HttpClient(new HttpStub((r, _) => Task.FromResult(HttpStub.Json(
-            r.RequestUri!.AbsolutePath.EndsWith("/code", StringComparison.Ordinal)
-                ? """{"device_code":"code","user_code":"ABCD","expires_in":900}""" : reply))));
+        using var http = DeviceFlow("""{"device_code":"code","user_code":"ABCD","expires_in":900}""", reply);
         var failure = await Assert.ThrowsExactlyAsync<InvalidOperationException>(() =>
             new DeviceLogin(http, (_, _) => Task.CompletedTask).SignInAsync(TextWriter.Null, CancellationToken.None));
         Assert.Contains(JsonElement.Parse(reply).GetProperty("error").GetString()!, failure.Message);
@@ -150,7 +166,7 @@ public sealed class HttpTests
             return HttpStub.Json($$"""{"tunnelId":"blue-tunnel","clusterId":"{{cluster}}"}""");
         })
         { AllowAutoRedirect = false };
-        await using var sdk = new TunnelBackend(() => Task.FromResult("user-token"), handler);
+        await using var sdk = Management(handler);
         Assert.AreEqual($"blue-tunnel.{cluster}", await sdk.CreateAsync(region, CancellationToken.None));
         Assert.AreEqual($"{cluster}.rel.tunnels.api.visualstudio.com", createdOn);
         CollectionAssert.AreEqual(new[] { lookup }, lookups);
@@ -174,12 +190,11 @@ public sealed class HttpTests
     [TestMethod]
     public async Task RegionsCombineTheServiceRecommendationWithMeasuredLatency()
     {
-        using var handler = new HttpStub((request, _) =>
+        using var handler = OnGet(request =>
         {
-            Assert.AreEqual(HttpMethod.Get, request.Method);
             var recommendations = request.RequestUri!.AbsolutePath == "/clusters/recommendations";
             Assert.AreEqual(recommendations ? "user-token" : null, request.Headers.Authorization?.Parameter);
-            return Task.FromResult(HttpStub.Json(recommendations ? """
+            return HttpStub.Json(recommendations ? """
                 {"preferredClusterId":"usw2","recommendedClusterId":"usw2","isFallback":false,"recommendations":[
                   {"clusterId":"usw2","azureLocation":"WestUs2","azureGeo":"us","availability":"Available","utilizationPercent":27.59,"reason":"Preferred cluster with available capacity"},
                   {"clusterId":"asse","azureLocation":"SouthEastAsia","azureGeo":"as","availability":"Degraded","utilizationPercent":91.2,"reason":"Available fallback cluster"}]}
@@ -187,24 +202,21 @@ public sealed class HttpTests
                 [{"clusterId":"asse","uri":"https://asse.example.invalid","azureLocation":"SouthEastAsia"},
                  {"clusterId":"euw","uri":"https://euw.example.invalid","azureLocation":"WestEurope"},
                  {"clusterId":"usw2","uri":"https://usw2.example.invalid","azureLocation":"WestUs2"}]
-                """));
-        })
-        { AllowAutoRedirect = false };
+                """);
+        });
         Dictionary<string, TimeSpan?> latency = new()
         {
             ["https://asse.example.invalid"] = null,
             ["https://euw.example.invalid"] = TimeSpan.FromMilliseconds(39),
             ["https://usw2.example.invalid"] = TimeSpan.FromMilliseconds(203),
         };
-        await using var sdk = new TunnelBackend(() => Task.FromResult("user-token"), handler,
-            measureLatency: (endpoint, _) => Task.FromResult(latency[endpoint!]));
-        Assert.AreEqual(string.Join(Environment.NewLine,
+        await using var sdk = Management(handler, (endpoint, _) => Task.FromResult(latency[endpoint!]));
+        await AssertRegionsAsync(sdk,
             "REGION  LOCATION       LATENCY  AVAILABILITY  LOAD  REASON",
             "euw     WestEurope     39 ms    -             -     -",
             "usw2    WestUs2        203 ms   Available     28%   Preferred cluster with available capacity",
             "asse    SouthEastAsia  -        Degraded      91%   Available fallback cluster",
-            "Without --region, 'create' uses the recommended region usw2."),
-            TunnelRegion.FormatTable(await sdk.ListRegionsAsync(CancellationToken.None)));
+            "Without --region, 'create' uses the recommended region usw2.");
     }
 
     [TestMethod]
@@ -214,11 +226,24 @@ public sealed class HttpTests
             ? """[{"clusterId":"euw","uri":"","azureLocation":"WestEurope"}]""" : """{"recommendations":[]}""")))
         { AllowAutoRedirect = false };
         // Without an injected measurement the real probe runs, and an unusable endpoint must not fail the listing.
-        await using var sdk = new TunnelBackend(() => Task.FromResult("user-token"), handler);
-        Assert.AreEqual(string.Join(Environment.NewLine,
+        await using var sdk = Management(handler);
+        await AssertRegionsAsync(sdk,
             "REGION  LOCATION    LATENCY  AVAILABILITY  LOAD  REASON",
-            "euw     WestEurope  -        -             -     -"), TunnelRegion.FormatTable(await sdk.ListRegionsAsync(CancellationToken.None)));
+            "euw     WestEurope  -        -             -     -");
     }
+
+    private static TunnelBackend Management(HttpStub handler, Func<string?, CancellationToken, Task<TimeSpan?>>? latency = null) =>
+        new(() => Task.FromResult("user-token"), handler, measureLatency: latency);
+
+    private static HttpStub OnGet(Func<HttpRequestMessage, HttpResponseMessage> reply) => new((request, _) =>
+    {
+        Assert.AreEqual(HttpMethod.Get, request.Method);
+        return Task.FromResult(reply(request));
+    })
+    { AllowAutoRedirect = false };
+
+    private static async Task AssertRegionsAsync(TunnelBackend sdk, params string[] lines) =>
+        Assert.AreEqual(string.Join(Environment.NewLine, lines), TunnelRegion.FormatTable(await sdk.ListRegionsAsync(CancellationToken.None)));
 
     [TestMethod]
     public async Task LatencyProbeTimesOnlyTheWarmRequestAndReportsUnreachableEndpointsAsUnknown()
@@ -271,33 +296,31 @@ public sealed class HttpTests
             ["use2/red-tunnel"] = """{"tunnelId":"red-tunnel","clusterId":"use2","expiration":"2026-12-01T10:00:00+02:00","status":{},"ports":[]}""",
             ["euw/bcdfghjk"] = """{"tunnelId":"bcdfghjk","clusterId":"euw"}""",
         };
-        using var handler = new HttpStub((request, _) =>
+        using var handler = OnGet(request =>
         {
-            Assert.AreEqual(HttpMethod.Get, request.Method);
             Assert.AreEqual("user-token", request.Headers.Authorization?.Parameter);
             var query = System.Web.HttpUtility.ParseQueryString(request.RequestUri!.Query);
             if (request.RequestUri.AbsolutePath == "/tunnels")
             {
                 Assert.AreEqual("true", query["global"]);
                 // Like the service, the cross-region listing returns empty port lists.
-                return Task.FromResult(HttpStub.Json("""
+                return HttpStub.Json("""
                     {"value":[
                       {"clusterId":"use2","value":[{"tunnelId":"blue-tunnel","clusterId":"use2","ports":[]},{"tunnelId":"red-tunnel","clusterId":"use2","ports":[]}]},
                       {"clusterId":"euw","value":[{"tunnelId":"bcdfghjk","clusterId":"euw","ports":[]},{"tunnelId":"gone-tunnel","clusterId":"euw","ports":[]}]}]}
-                    """));
+                    """);
             }
             Assert.AreEqual("true", query["includePorts"], true);
             var key = request.RequestUri.Host.Split('.')[0] + request.RequestUri.AbsolutePath["/tunnels".Length..];
             if (details.TryGetValue(key, out var json))
-                return Task.FromResult(HttpStub.Json(json));
+                return HttpStub.Json(json);
             // The service reports a missing tunnel as a ProblemDetails "Not Found".
             var missing = new HttpResponseMessage(HttpStatusCode.NotFound)
             { Content = new StringContent("""{"title":"Not Found","status":404}""", Encoding.UTF8, "application/problem+json") };
             missing.Headers.Add("X-Served-By", "tunnels-prod-rel-euw-v3-cluster");
-            return Task.FromResult(missing);
-        })
-        { AllowAutoRedirect = false };
-        await using var sdk = new TunnelBackend(() => Task.FromResult("user-token"), handler);
+            return missing;
+        });
+        await using var sdk = Management(handler);
         var table = TunnelSummary.FormatTable(await sdk.ListAsync(CancellationToken.None));
         Assert.AreEqual(string.Join(Environment.NewLine,
             "TUNNEL            HOSTS  CLIENTS  EXPIRES            PORTS",
@@ -312,18 +335,15 @@ public sealed class HttpTests
         var directory = Directory.CreateTempSubdirectory("devtunnel-update-");
         var exe = Path.Combine(directory.FullName, "installed");
         var content = Encoding.UTF8.GetBytes("replacement binary");
-        var download = OperatingSystem.IsWindows() ? Zip("devtunnelsvc.exe", content) : content;
-        var name = ReleaseUpdate.AssetName(OperatingSystem.IsWindows(), System.Runtime.InteropServices.RuntimeInformation.ProcessArchitecture);
+        var download = Package(content);
         var digest = "wrong";
         var downloads = 0;
-        using var http = new HttpClient(new HttpStub((r, _) =>
+        using var http = ReleaseClient(() => Metadata("v1.2.3", download, digest), uri =>
         {
-            if (r.RequestUri!.Host == "api.github.com")
-                return Task.FromResult(HttpStub.Json(JsonSerializer.Serialize(new { tag_name = "v1.2.3", assets = new[] { new { name, size = download.Length, digest } } })));
-            Assert.AreEqual($"https://github.com/VasiliyNovikov/DevTunnelSvc/releases/download/v1.2.3/{name}", r.RequestUri.AbsoluteUri);
+            Assert.AreEqual($"https://github.com/VasiliyNovikov/DevTunnelSvc/releases/download/v1.2.3/{AssetName}", uri.AbsoluteUri);
             downloads++;
-            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK) { Content = new ByteArrayContent(download) });
-        }));
+            return Download(download);
+        });
         var update = new ReleaseUpdate(http);
         try
         {
@@ -338,7 +358,7 @@ public sealed class HttpTests
             Assert.Contains("SHA-256", (await Assert.ThrowsExactlyAsync<InvalidDataException>(() => update.RunAsync("1.2.2", exe, false, () => new MemoryStream(), CancellationToken.None))).Message);
             Assert.AreEqual("original", await File.ReadAllTextAsync(exe));
             Assert.HasCount(1, directory.GetFiles());
-            digest = $"sha256:{Convert.ToHexString(SHA256.HashData(download))}";
+            digest = Digest(download);
             var result = await update.RunAsync("1.2.2", exe, false, () => new MemoryStream(), CancellationToken.None);
             Assert.Contains("Installed v1.2.3", result);
             CollectionAssert.AreEqual(content, await File.ReadAllBytesAsync(exe));
@@ -362,27 +382,24 @@ public sealed class HttpTests
         var directory = Directory.CreateTempSubdirectory("devtunnel-tray-update-");
         var exe = Path.Combine(directory.FullName, "installed");
         var bytes = "replacement"u8.ToArray();
-        var windows = OperatingSystem.IsWindows();
-        var archive = windows ? Zip("devtunnelsvc.exe", bytes) : bytes;
-        var name = ReleaseUpdate.AssetName(windows, System.Runtime.InteropServices.RuntimeInformation.ProcessArchitecture);
-        var digest = validDigest ? $"sha256:{Convert.ToHexString(SHA256.HashData(archive))}" : "sha256:wrong";
+        var archive = Package(bytes);
+        var digest = validDigest ? Digest(archive) : "sha256:wrong";
         var running = initiallyRunning;
         var checks = 0;
         var confirms = 0;
         var starts = 0;
         var leases = 0;
-        using var http = new HttpClient(new HttpStub((r, _) =>
+        using var http = ReleaseClient(() =>
         {
-            if (r.RequestUri!.Host == "api.github.com")
-            {
-                Assert.AreEqual(initiallyRunning, running);
-                checks++;
-                return Task.FromResult(HttpStub.Json(JsonSerializer.Serialize(new { tag_name = "v2.0.0", assets = new[] { new { name, size = archive.Length, digest } } })));
-            }
+            Assert.AreEqual(initiallyRunning, running);
+            checks++;
+            return Metadata("v2.0.0", archive, digest);
+        }, uri =>
+        {
             Assert.IsFalse(running);
-            Assert.AreEqual($"https://github.com/VasiliyNovikov/DevTunnelSvc/releases/download/v2.0.0/{name}", r.RequestUri.AbsoluteUri);
-            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK) { Content = new ByteArrayContent(archive) });
-        }));
+            Assert.AreEqual($"https://github.com/VasiliyNovikov/DevTunnelSvc/releases/download/v2.0.0/{AssetName}", uri.AbsoluteUri);
+            return Download(archive);
+        });
         try
         {
             await File.WriteAllTextAsync(exe, "original");
@@ -439,11 +456,7 @@ public sealed class HttpTests
     {
         var handoff = new UpdateHandoff((_, _) => throw new AssertFailedException("The service must not be contacted."),
             () => throw new AssertFailedException("The service must not be started."));
-        using var http = new HttpClient(new HttpStub((r, _) =>
-        {
-            Assert.AreEqual("api.github.com", r.RequestUri!.Host, "No asset should be downloaded.");
-            return Task.FromResult(HttpStub.Json("""{"tag_name":"v2.0.0","assets":[]}"""));
-        }));
+        using var http = HttpStub.ReleaseMetadata(() => """{"tag_name":"v2.0.0","assets":[]}""");
         var result = await new ReleaseUpdate(http, handoff).RunAsync(installed, "unused", check, () => throw new AssertFailedException(), CancellationToken.None);
         Assert.Contains(expected, result);
     }
@@ -467,11 +480,7 @@ public sealed class HttpTests
     [TestMethod]
     public async Task ChangedReleaseIsRejectedBeforeTheWorkerStopsTheService()
     {
-        using var http = new HttpClient(new HttpStub((r, _) =>
-        {
-            Assert.AreEqual("api.github.com", r.RequestUri!.Host);
-            return Task.FromResult(HttpStub.Json("""{"tag_name":"v3.0.0","assets":[]}"""));
-        }));
+        using var http = HttpStub.ReleaseMetadata(() => """{"tag_name":"v3.0.0","assets":[]}""");
         var updater = new ReleaseUpdate(http, new((_, _) => throw new AssertFailedException(), () => throw new AssertFailedException()));
         var failure = await Assert.ThrowsExactlyAsync<InvalidOperationException>(() => updater.RunAsync("1.0.0", "unused", false,
             () => throw new AssertFailedException(), CancellationToken.None, "v2.0.0"));
@@ -488,15 +497,12 @@ public sealed class HttpTests
         using var limit = new CancellationTokenSource(TimeSpan.FromSeconds(10));
         var pipe = $"devtunnel-copy-{Guid.NewGuid():N}";
         var installed = Path.Combine(root.FullName, "installed");
-        var copy = Path.Combine(root.CreateSubdirectory($".devtunnelsvc-update-{Guid.NewGuid():N}").FullName, "installed");
+        var copy = UpdateWorkerTests.WorkerPath(root);
         var state = root.CreateSubdirectory("state").FullName;
         var replacement = "verified image"u8.ToArray();
-        var name = ReleaseUpdate.AssetName(OperatingSystem.IsWindows(), System.Runtime.InteropServices.RuntimeInformation.ProcessArchitecture);
-        var asset = OperatingSystem.IsWindows() ? Zip("devtunnelsvc.exe", replacement) : replacement;
-        var digest = validDigest ? $"sha256:{Convert.ToHexString(SHA256.HashData(asset))}" : "sha256:invalid";
-        using var http = new HttpClient(new HttpStub((r, _) => Task.FromResult(r.RequestUri!.Host == "api.github.com"
-            ? HttpStub.Json(JsonSerializer.Serialize(new { tag_name = "v2.0.0", assets = new[] { new { name, size = asset.Length, digest } } }))
-            : new HttpResponseMessage(HttpStatusCode.OK) { Content = new ByteArrayContent(asset) })));
+        var asset = Package(replacement);
+        var digest = validDigest ? Digest(asset) : "sha256:invalid";
+        using var http = ReleaseClient(() => Metadata("v2.0.0", asset, digest), _ => Download(asset));
         var server = force ? ServiceLifetime.RunAsync(TextWriter.Null, pipe, state, Cli.NoBackgroundUpdates, limit.Token) : Task.CompletedTask;
         try
         {
@@ -606,7 +612,7 @@ public sealed class HttpTests
     [DataRow("""{"device_code":"test","user_code":"1234","expires_in":0}""")]
     public async Task MalformedDeviceCodesAreNeverDisplayedOrPolled(string json)
     {
-        using var http = new HttpClient(new HttpStub((_, _) => Task.FromResult(HttpStub.Json(json))));
+        using var http = HttpStub.Respond(_ => HttpStub.Json(json));
         using var output = new StringWriter();
         var error = await Assert.ThrowsExactlyAsync<InvalidDataException>(() => new DeviceLogin(http,
             (_, _) => throw new AssertFailedException("Unexpected token poll."),
@@ -639,15 +645,13 @@ public sealed class HttpTests
     public async Task MissingReleaseOrAssetNeverReplacesTheInstalledFile()
     {
         var metadata = "null";
-        using var http = new HttpClient(new HttpStub((r, _) =>
-        {
-            Assert.AreEqual("api.github.com", r.RequestUri!.Host);
-            return Task.FromResult(HttpStub.Json(metadata));
-        }));
+        using var http = HttpStub.ReleaseMetadata(() => metadata);
         var updater = new ReleaseUpdate(http);
-        Assert.Contains("no release", (await Assert.ThrowsExactlyAsync<InvalidDataException>(() => updater.RunAsync("1.0.0", "unused", false, () => new MemoryStream(), CancellationToken.None))).Message);
+        async Task<string> Failure() => (await Assert.ThrowsExactlyAsync<InvalidDataException>(() =>
+            updater.RunAsync("1.0.0", "unused", false, () => new MemoryStream(), CancellationToken.None))).Message;
+        Assert.Contains("no release", await Failure());
         metadata = """{"tag_name":"v1.1.0","assets":[]}""";
-        Assert.Contains("Release v1.1.0 has no", (await Assert.ThrowsExactlyAsync<InvalidDataException>(() => updater.RunAsync("1.0.0", "unused", false, () => new MemoryStream(), CancellationToken.None))).Message);
+        Assert.Contains("Release v1.1.0 has no", await Failure());
         Assert.IsFalse(ReleaseUpdate.IsNewer("1.1.0", "v1.1.0"));
         Assert.ThrowsExactly<PlatformNotSupportedException>(() => ReleaseUpdate.AssetName(false, System.Runtime.InteropServices.Architecture.X86));
     }
@@ -655,9 +659,7 @@ public sealed class HttpTests
     [TestMethod]
     public async Task MissingOAuthResponseAfterTheDeviceCodeIsAnError()
     {
-        using var http = new HttpClient(new HttpStub((r, _) => Task.FromResult(HttpStub.Json(
-            r.RequestUri!.AbsolutePath.EndsWith("/code", StringComparison.Ordinal)
-                ? """{"device_code":"test","user_code":"ABCD","expires_in":900}""" : "null"))));
+        using var http = DeviceFlow("""{"device_code":"test","user_code":"ABCD","expires_in":900}""", "null");
         var failure = await Assert.ThrowsExactlyAsync<InvalidOperationException>(() => new DeviceLogin(http, (d, _) =>
         {
             Assert.AreEqual(TimeSpan.FromSeconds(5), d);
@@ -707,6 +709,15 @@ public sealed class HttpTests
         }
         finally { dir.Delete(true); }
     }
+
+    private static string AssetName => ReleaseUpdate.AssetName(OperatingSystem.IsWindows(), System.Runtime.InteropServices.RuntimeInformation.ProcessArchitecture);
+    private static HttpClient ReleaseClient(Func<HttpResponseMessage> metadata, Func<Uri, HttpResponseMessage> download) =>
+        HttpStub.Respond(r => r.RequestUri!.Host == "api.github.com" ? metadata() : download(r.RequestUri));
+    private static byte[] Package(byte[] image) => OperatingSystem.IsWindows() ? Zip("devtunnelsvc.exe", image) : image;
+    private static string Digest(byte[] asset) => $"sha256:{Convert.ToHexString(SHA256.HashData(asset))}";
+    private static HttpResponseMessage Metadata(string tag, byte[] bytes, string digest) =>
+        HttpStub.Json(JsonSerializer.Serialize(new { tag_name = tag, assets = new[] { new { name = AssetName, size = bytes.Length, digest } } }));
+    private static HttpResponseMessage Download(byte[] bytes) => new(HttpStatusCode.OK) { Content = new ByteArrayContent(bytes) };
 
     private static byte[] Zip(string name, byte[] bytes)
     {

@@ -7,6 +7,8 @@ namespace DevTunnelSvc.Tests;
 public sealed class AppLogTests
 {
     private DirectoryInfo state = null!;
+    private readonly List<string> warnings = [];
+    private AppLog Logger(string source) => new(state.FullName, source, warnings.Add);
 
     [TestInitialize]
     public void SetUp() => state = Directory.CreateTempSubdirectory("devtunnel-app-log-");
@@ -62,8 +64,7 @@ public sealed class AppLogTests
     [TestMethod]
     public void ABusyWriterCannotBeBypassedAndTheNextEventCanStillBeRecorded()
     {
-        List<string> warnings = [];
-        var log = new AppLog(state.FullName, "service", warnings.Add);
+        var log = Logger("service");
         log.Write("Before contention.");
         using (File.Open(log.FilePath + ".lock", FileMode.Open, FileAccess.ReadWrite, FileShare.None))
             log.Write("Blocked event.");
@@ -78,8 +79,7 @@ public sealed class AppLogTests
     [TestMethod]
     public async Task LoggingFailureDoesNotAbortWorkAndTheLoggerRecoversWithoutLeakingErrors()
     {
-        List<string> warnings = [];
-        var log = new AppLog(state.FullName, "update", warnings.Add);
+        var log = Logger("update");
         Directory.CreateDirectory(log.FilePath);
         log.Write("First failure.");
         log.Write("Second failure.");
@@ -106,8 +106,7 @@ public sealed class AppLogTests
         if (!OperatingSystem.IsLinux()) return;
         var outside = Path.Combine(state.FullName, "unrelated");
         File.WriteAllText(outside, "untouched");
-        List<string> warnings = [];
-        var log = new AppLog(state.FullName, "service", warnings.Add);
+        var log = Logger("service");
         var gate = log.FilePath + ".lock";
         File.CreateSymbolicLink(gate, outside);
         log.Write("Lost event.");

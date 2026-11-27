@@ -37,19 +37,18 @@ internal sealed class TrayUpdateUI(HttpClient http, Func<UpdateInstallation> ins
         var tag = selectedTag ?? (await new ReleaseUpdate(http).FindNewerAsync(Program.Version, ct))?.TagName;
         if (tag is null || !ReleaseUpdate.IsNewer(Program.Version, tag)) { Inform(ReleaseUpdate.UpToDate(Program.Version)); return 0; }
         var target = installation();
-        var log = new AppLog(target.Directory, "update", Console.Error.WriteLine);
-        log.Write($"Updating {Program.Version} to {tag}.");
+        target.Announce(Program.Version, tag);
         // After replacement this process can't lazy-load WinForms from its original bundle.
         var result = await UpdateWorker.RunAsync(target.Image, [TrayMenu.UpdateWorker, servicePid.ToString(CultureInfo.InvariantCulture)],
-            tag, log, ErrorDisplayedExitCode, ct);
+            tag, target.Log, ErrorDisplayedExitCode, ct);
         return result.ExitCode == 0 ? 0 : 1;
     }
 
     private async Task<int> RunFromCopyAsync(int servicePid, string expected, CancellationToken ct)
     {
         var target = installation();
-        var installed = UpdateWorker.InstalledPath(target.Image);
-        var log = new AppLog(target.Directory, "update", Console.Error.WriteLine);
+        var installed = target.ResolveInstalledPath();
+        var log = target.Log;
         using var service = SafeProcessHandle.Open(servicePid);
         var updater = new ReleaseUpdate(http);
         var flow = new TrayUpdate(async t =>
@@ -64,8 +63,8 @@ internal sealed class TrayUpdateUI(HttpClient http, Func<UpdateInstallation> ins
         }, async (release, t) =>
         {
             await TrayUpdate.WaitForExitAsync(service.WaitForExitAsync);
-            await updater.ApplyAsync(release, installed, () => UpdateWorker.AcquireLease(target.Image, installed, target.Directory), t);
-        }, () => UpdateHandoff.StartInstalledAsync(installed, target.RunInstalled, log.Write), log.Write);
+            await updater.ApplyAsync(release, installed, () => target.AcquireLease(installed), t);
+        }, () => target.RestartAsync(installed), log.Write);
         var code = await TrayUpdate.WithFeedbackAsync(
             () => log.TraceAsync("Worker", () => UpdateWorker.UntilParentClosesAsync(target.ParentClosed(), t => flow.RunAsync(Program.Version, t), ct)),
             Inform, text => ReportError($"{text}\nApplication log: {log.FilePath}"));

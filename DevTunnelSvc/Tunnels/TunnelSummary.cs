@@ -10,9 +10,12 @@ internal sealed record TunnelSummary(string Tunnel, ulong? HostConnections, ulon
     // Dev Tunnels allows 10 tunnels per user and 10 ports per tunnel, so the table fits in one control reply.
     public static string FormatTable(IReadOnlyCollection<TunnelSummary> tunnels) => tunnels.Count == 0
         ? "No tunnels found. Run 'create' to create one."
-        : TextTable.Format(Header, tunnels.OrderBy(t => t.Tunnel, StringComparer.Ordinal).Select(t => t.Cells()));
+        : TextTable.Format(Header, Rows(tunnels));
 
-    internal string[] Cells() =>
+    internal static IEnumerable<string[]> Rows(IEnumerable<TunnelSummary> tunnels) =>
+        tunnels.OrderBy(t => t.Tunnel, StringComparer.Ordinal).Select(t => t.Cells());
+
+    private string[] Cells() =>
     [
         Tunnel,
         CountCell(HostConnections),

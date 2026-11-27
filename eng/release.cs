@@ -1,4 +1,6 @@
+#!/usr/bin/env dotnet
 #:property PublishAot=false
+#:include Repository.cs
 using System.Diagnostics;
 using System.IO.Compression;
 using System.Runtime.InteropServices;
@@ -17,7 +19,7 @@ if (rid is null)
     return 2;
 }
 
-var root = Directory.GetParent((string)AppContext.GetData("EntryPointFileDirectoryPath")!)!.FullName;
+var root = Repository.Root;
 var staging = Directory.CreateTempSubdirectory("devtunnelsvc-release-");
 try
 {

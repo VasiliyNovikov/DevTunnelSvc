@@ -33,9 +33,8 @@ internal sealed class MappingFile(string stateDirectory)
         StateFile.RejectLink(path);
         try
         {
-            using var file = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read | FileShare.Delete);
-            if (!OperatingSystem.IsWindows() && File.GetUnixFileMode(file.SafeFileHandle) != StateFile.OwnerFile)
-                throw new UnauthorizedAccessException("Saved mappings must have mode 0600.");
+            using var file = StateFile.OpenSnapshot(path);
+            StateFile.RequirePrivateFile(file, "Saved mappings must have mode 0600.");
             if (file.Length > MaxBytes) throw new InvalidDataException("Saved mappings exceed the storage limit.");
             return Decode(JsonSerializer.Deserialize(file, MappingJson.Default.SavedMappings));
         }

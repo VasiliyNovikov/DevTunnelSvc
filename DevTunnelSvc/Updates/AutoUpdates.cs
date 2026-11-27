@@ -46,7 +46,7 @@ internal sealed class AutoUpdates : IAsyncDisposable
         return request.Command switch
         {
             AutoUpdateConsent.Status => Task.FromResult(Enabled ? AutoUpdateConsent.Enabled : AutoUpdateConsent.Disabled),
-            Shutdown => StopForUpdateAsync(request, execute, ct),
+            Shutdown => execute(PrepareShutdown(request), ct),
             _ => ConfigureAsync(request.Command == AutoUpdateConsent.Enable)
         };
     }
@@ -66,13 +66,13 @@ internal sealed class AutoUpdates : IAsyncDisposable
         return message;
     }
 
-    private Task<string> StopForUpdateAsync(Request request, Func<Request, CancellationToken, Task<string>> execute, CancellationToken ct)
+    private Request PrepareShutdown(Request request)
     {
         if (request.ServicePid != Environment.ProcessId || !Enabled)
             throw new InvalidOperationException("Auto-update was disabled or the selected service instance has changed.");
         // A failed download also restarts the old service. Don't stop it again immediately for the same release.
         file.Save(true, DateTimeOffset.UtcNow);
-        return execute(request with { Command = "shutdown-for-update" }, ct);
+        return request with { Command = "shutdown-for-update" };
     }
 
     private static TimeSpan InitialDelay(DateTimeOffset? attempted) => attempted is { } last

@@ -13,42 +13,32 @@ public sealed class CliTests
     [DataRow("--help")]
     public async Task HelpPrintsUsage(string? option)
     {
-        using var output = new StringWriter();
-        using var error = new StringWriter();
-
-        var exitCode = await Cli.RunAsync(option is null ? [] : [option], output, error);
+        var (exitCode, output, error) = await Cli.CaptureAsync(option is null ? [] : [option]);
 
         Assert.AreEqual(0, exitCode);
-        Assert.Contains("Usage: devtunnelsvc", output.ToString());
-        Assert.Contains("--version", output.ToString());
-        Assert.IsEmpty(error.ToString());
+        Assert.Contains("Usage: devtunnelsvc", output);
+        Assert.Contains("--version", output);
+        Assert.IsEmpty(error);
     }
 
     [TestMethod]
     public async Task VersionPrintsTheEmbeddedReleaseVersion()
     {
-        using var output = new StringWriter();
-        using var error = new StringWriter();
-
-        var exitCode = await Cli.RunAsync(["--version"], output, error);
+        var result = await Cli.CaptureAsync(["--version"]);
 
         var expected = typeof(Program).Assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()!.InformationalVersion;
-        Assert.AreEqual(0, exitCode);
-        Assert.AreEqual(expected + Environment.NewLine, output.ToString());
-        Assert.IsEmpty(error.ToString());
+        Assert.AreEqual(0, result.Code);
+        Assert.AreEqual(expected + Environment.NewLine, result.Output);
+        Assert.IsEmpty(result.Error);
     }
 
     [TestMethod]
     public async Task UnknownArgumentFails()
     {
-        using var output = new StringWriter();
-        using var error = new StringWriter();
-
-        var exitCode = await Cli.RunAsync(["--unknown"], output, error);
-
-        Assert.AreNotEqual(0, exitCode);
-        Assert.IsEmpty(output.ToString());
-        Assert.Contains("Invalid arguments", error.ToString());
+        var result = await Cli.CaptureAsync(["--unknown"]);
+        Assert.AreNotEqual(0, result.Code);
+        Assert.IsEmpty(result.Output);
+        Assert.Contains("Invalid arguments", result.Error);
     }
 
     [TestMethod]
@@ -116,13 +106,12 @@ public sealed class CliTests
     [TestMethod]
     public async Task UpdateHelpDistinguishesReadOnlyChecksFromUnattendedRestarts()
     {
-        using var output = new StringWriter();
-        using var error = new StringWriter();
-        Assert.AreEqual(0, await Cli.RunAsync(["update", "--help"], output, error, (_, _) => throw new AssertFailedException()));
-        Assert.Contains("without installing it or stopping the service", output.ToString());
-        Assert.Contains("Without asking, stop a running service and its mappings", output.ToString());
-        Assert.Contains("even if it was stopped", output.ToString());
-        Assert.IsEmpty(error.ToString());
+        var help = await Cli.CaptureAsync(["update", "--help"]);
+        Assert.AreEqual(0, help.Code);
+        Assert.Contains("without installing it or stopping the service", help.Output);
+        Assert.Contains("Without asking, stop a running service and its mappings", help.Output);
+        Assert.Contains("even if it was stopped", help.Output);
+        Assert.IsEmpty(help.Error);
     }
 
     [TestMethod]
@@ -218,4 +207,12 @@ internal static class Cli
         Func<Request, CancellationToken, Task<string>>? send = null, LocalActions? actions = null, TextReader? input = null) =>
         Program.RunAsync(args, input ?? TextReader.Null, output, error, send ?? ((_, _) => throw new AssertFailedException("Unexpected service request.")),
             actions ?? NoLocalActions);
+
+    internal static async Task<(int Code, string Output, string Error)> CaptureAsync(string[] args, Func<Request, CancellationToken, Task<string>>? send = null)
+    {
+        using var output = new StringWriter();
+        using var error = new StringWriter();
+        var code = await RunAsync(args, output, error, send);
+        return (code, output.ToString(), error.ToString());
+    }
 }

@@ -21,11 +21,11 @@ internal sealed class MappingSession : IAsyncDisposable
     {
         Map = map;
         restore = new();
-        opening = RestoreAsync(open, delay, writeEvent, restore.Token);
+        opening = RestoreAsync(open, ct => delay(TimeSpan.FromSeconds(30), ct), writeEvent, restore.Token);
     }
 
     private async Task<ILiveTunnel> RestoreAsync(Func<CancellationToken, Task<ILiveTunnel>> open,
-        Func<TimeSpan, CancellationToken, Task> delay, Action<string> writeEvent, CancellationToken ct)
+        Func<CancellationToken, Task> waitForRetry, Action<string> writeEvent, CancellationToken ct)
     {
         // An offline peer must not delay the control pipe, the tray, or another mapping.
         await Task.Yield();
@@ -48,7 +48,7 @@ internal sealed class MappingSession : IAsyncDisposable
                 var reason = ex is OperationCanceledException ? "connection timed out" : ControlServer.ErrorMessage(ex);
                 state = $"Retrying ({reason})";
             }
-            await delay(TimeSpan.FromSeconds(30), ct);
+            await waitForRetry(ct);
         }
     }
 

@@ -37,7 +37,12 @@ jobs:
       - name: Measure Roslyn metrics and gate method length
         if: ${{ !cancelled() && matrix.rid == 'linux-x64' }}
         run: dotnet eng/metrics.cs
-      - name: Upload coverage, CRAP, and Roslyn reports
+      - name: Reject duplicated C# token sequences
+        if: ${{ !cancelled() && matrix.rid == 'linux-x64' }}
+        run: |
+          dotnet eng/duplication.cs
+          dotnet eng/test-duplication.cs
+      - name: Upload coverage, CRAP, Roslyn, and duplication reports
         if: ${{ !cancelled() && matrix.rid == 'linux-x64' }}
         uses: actions/upload-artifact@v7
         with:
@@ -45,6 +50,7 @@ jobs:
           path: |
             artifacts/coverage/
             artifacts/metrics/
+            artifacts/duplication/
           if-no-files-found: error
       - name: Check formatting
         if: matrix.rid == 'linux-x64'

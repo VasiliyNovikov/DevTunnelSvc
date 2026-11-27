@@ -21,8 +21,7 @@ internal sealed class AutoUpdateFile(string directory)
         try
         {
             using var stream = File.OpenRead(path);
-            if (!OperatingSystem.IsWindows() && File.GetUnixFileMode(stream.SafeFileHandle) != StateFile.OwnerFile)
-                throw new UnauthorizedAccessException("Auto-update settings must have mode 0600.");
+            StateFile.RequirePrivateFile(stream, "Auto-update settings must have mode 0600.");
             if (stream.Length > 4096) throw new InvalidDataException("Invalid auto-update settings.");
             var settings = JsonSerializer.Deserialize(stream, AutoUpdateJson.Default.AutoUpdateSettings);
             return settings is { Version: 1 } ? settings : throw new InvalidDataException("Unsupported auto-update settings version.");

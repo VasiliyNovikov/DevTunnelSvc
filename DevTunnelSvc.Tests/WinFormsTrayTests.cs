@@ -1,18 +1,19 @@
 #if WINDOWS
 using System.Drawing;
-using System.IO.Pipes;
 using System.Runtime.InteropServices;
 using System.Windows.Forms;
 using DevTunnelSvc.Platform;
 using DevTunnelSvc.Service;
 using DevTunnelSvc.Tunnels;
-using ControlPipe = DevTunnelSvc.Service.Control;
 
 namespace DevTunnelSvc.Tests;
 
 [TestClass]
 public sealed class WinFormsTrayTests
 {
+    private static TrayIcon CreateTray(string pipe, TaskCompletionSource<Exception?> stopped, Action<NotifyIcon> initialize) =>
+        new(pipe, _ => { }, TrayMenuTests.NoQueries, stopped.SetResult, initialize);
+
     [TestMethod]
     public async Task TrayMenuExitAndServiceShutdownBothDisposeTheIconOnItsStaThread()
     {
@@ -20,7 +21,7 @@ public sealed class WinFormsTrayTests
         {
             var stopped = new TaskCompletionSource<Exception?>(TaskCreationOptions.RunContinuationsAsynchronously);
             var disposedOnOwner = false;
-            using (var tray = new TrayIcon("unused", _ => { }, TrayMenuTests.NoQueries, e => stopped.SetResult(e), icon =>
+            using (var tray = CreateTray("unused", stopped, icon =>
             {
                 var owner = Environment.CurrentManagedThreadId;
                 Assert.AreEqual(ApartmentState.STA, Thread.CurrentThread.GetApartmentState());
@@ -45,7 +46,7 @@ public sealed class WinFormsTrayTests
         Assert.AreSame(failure, Assert.ThrowsExactly<IOException>(() =>
             new TrayIcon("unused", _ => { }, TrayMenuTests.NoQueries, _ => Assert.Fail(), _ => throw failure)));
         var stopped = new TaskCompletionSource<Exception?>(TaskCreationOptions.RunContinuationsAsynchronously);
-        using var tray = new TrayIcon("unused", _ => { }, TrayMenuTests.NoQueries, e => stopped.SetResult(e),
+        using var tray = CreateTray("unused", stopped,
             _ => SynchronizationContext.Current!.Post(_ => throw failure, null));
         Assert.AreSame(failure, await stopped.Task.WaitAsync(TimeSpan.FromSeconds(5)));
     }
@@ -55,12 +56,11 @@ public sealed class WinFormsTrayTests
     [DataRow(true)]
     public async Task ServiceStopAndTrayExitInterruptAStatusClickWithoutBlockingTheMenu(bool clickExit)
     {
-        var pipe = $"devtunnel-forms-{Guid.NewGuid():N}";
-        using var server = new NamedPipeServerStream(pipe, PipeDirection.InOut, 1, PipeTransmissionMode.Byte, ControlPipe.Options);
-        using var limit = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        using var pipe = new TestPipe(5);
+        using var server = pipe.Listen();
         var stopped = new TaskCompletionSource<Exception?>(TaskCreationOptions.RunContinuationsAsynchronously);
         var ui = new TaskCompletionSource<(SynchronizationContext Thread, ContextMenuStrip Menu)>(TaskCreationOptions.RunContinuationsAsynchronously);
-        using (var tray = new TrayIcon(pipe, _ => { }, TrayMenuTests.NoQueries, e => stopped.SetResult(e), icon =>
+        using (var tray = CreateTray(pipe.Name, stopped, icon =>
         {
             var popup = icon.ContextMenuStrip!;
             var thread = SynchronizationContext.Current!;
@@ -68,9 +68,8 @@ public sealed class WinFormsTrayTests
             thread.Post(_ => popup.Items[0].PerformClick(), null);
         }))
         {
-            await server.WaitForConnectionAsync(limit.Token);
-            Assert.AreEqual(LocalStatus.Command, (await ControlPipe.ReadAsync(server, Service.ControlJson.Default.Request, limit.Token)).Command);
-            var (thread, popup) = await ui.Task.WaitAsync(limit.Token);
+            Assert.AreEqual(LocalStatus.Command, (await pipe.ReadRequestAsync(server)).Command);
+            var (thread, popup) = await ui.Task.WaitAsync(pipe.Token);
             var canUseMenu = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
             thread.Post(_ =>
             {
@@ -82,10 +81,10 @@ public sealed class WinFormsTrayTests
                 popup.Show(Point.Empty);
                 if (clickExit) popup.Items[5].PerformClick();
             }, null);
-            Assert.IsTrue(await canUseMenu.Task.WaitAsync(limit.Token));
-            if (clickExit) Assert.IsNull(await stopped.Task.WaitAsync(limit.Token));
+            Assert.IsTrue(await canUseMenu.Task.WaitAsync(pipe.Token));
+            if (clickExit) Assert.IsNull(await stopped.Task.WaitAsync(pipe.Token));
         }
-        Assert.IsNull(await stopped.Task.WaitAsync(limit.Token));
+        Assert.IsNull(await stopped.Task.WaitAsync(pipe.Token));
     }
 
     [STATestMethod]
@@ -149,20 +148,21 @@ public sealed class WinFormsTrayTests
             content => TrayDialog.GetOrCreate(owner, icon, content), _ => { });
         using var menu = TrayIcon.CreatePopup(actions, _ => throw new AssertFailedException(), CancellationToken.None);
         menu.Opening += (_, e) => { Assert.IsFalse(e.Cancel); e.Cancel = true; };
-        menu.Show(Point.Empty);
-        Assert.AreEqual("Check for &updates", menu.Items[1].Text);
+        void ExpectLabel(string label, bool refresh = false)
+        {
+            if (refresh) queries.Releases.CheckAsync(CancellationToken.None).GetAwaiter().GetResult();
+            menu.Show(Point.Empty);
+            Assert.AreEqual(label, menu.Items[1].Text);
+        }
+        ExpectLabel("Check for &updates");
         Assert.IsFalse(((ToolStripMenuItem)menu.Items[2]).Checked);
         Assert.AreEqual(0, checks);
         autoUpdate = true;
-        queries.Releases.CheckAsync(CancellationToken.None).GetAwaiter().GetResult();
-        menu.Show(Point.Empty);
-        Assert.AreEqual("&Update to v2.0.0", menu.Items[1].Text);
+        ExpectLabel("&Update to v2.0.0", refresh: true);
         Assert.IsTrue(((ToolStripMenuItem)menu.Items[2]).Checked);
         Assert.AreEqual(1, checks);
         found = null;
-        queries.Releases.CheckAsync(CancellationToken.None).GetAwaiter().GetResult();
-        menu.Show(Point.Empty);
-        Assert.AreEqual("Check for &updates", menu.Items[1].Text);
+        ExpectLabel("Check for &updates", refresh: true);
         menu.Items[3].PerformClick();
         Assert.AreEqual("About DevTunnelSvc", owner.OwnedForms.Single().Text);
     }
@@ -175,7 +175,7 @@ public sealed class WinFormsTrayTests
     {
         using var icon = TrayDialog.LoadArtwork(16);
         using var form = new TrayDialog(icon, new("DevTunnelSvc Auto-update", Updates.AutoUpdateConsent.Question), confirmAction: "Enable");
-        var buttons = ((TableLayoutPanel)form.Controls[0]).Controls.OfType<FlowLayoutPanel>().Single().Controls.OfType<Button>();
+        var buttons = DialogButtons((TableLayoutPanel)form.Controls[0]);
         Assert.AreEqual(DialogResult.Yes, buttons.Single(button => button.Text == "Enable").DialogResult);
         Assert.AreSame((Button)form.CancelButton!, form.ActiveControl);
         Assert.AreSame(form.AcceptButton, form.CancelButton);
@@ -216,7 +216,7 @@ public sealed class WinFormsTrayTests
                 Assert.AreEqual(SystemColors.Control.ToArgb(), body.BackColor.ToArgb());
                 if (!SystemInformation.HighContrast)
                     Assert.AreEqual(Application.IsDarkModeEnabled, body.BackColor.GetBrightness() < body.ForeColor.GetBrightness());
-                var buttons = layout.Controls.OfType<FlowLayoutPanel>().Single().Controls.OfType<Button>();
+                var buttons = DialogButtons(layout);
                 Assert.AreEqual(confirm is null ? "OK" : "Cancel", ((Button)dialog.AcceptButton!).Text);
                 return confirm is null ? DialogResult.OK : buttons.Single(b => b.Text == confirm).DialogResult;
             });
@@ -225,6 +225,8 @@ public sealed class WinFormsTrayTests
         }
         finally { Application.SetColorMode(previousMode); SynchronizationContext.SetSynchronizationContext(previousContext); }
     }
+
+    private static IEnumerable<Button> DialogButtons(TableLayoutPanel layout) => layout.Controls.OfType<FlowLayoutPanel>().Single().Controls.OfType<Button>();
 
     [STATestMethod]
     [DataRow(false)]

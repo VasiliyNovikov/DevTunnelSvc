@@ -56,7 +56,7 @@ internal sealed class TrayStatusDialog : ThemedTrayForm
     internal void SetTunnels(IReadOnlyList<TunnelSummary> rows, string? error)
     {
         cloudHeading.Text = error is not null ? $"{Cloud}: {error}" : rows.Count == 0 ? $"{Cloud} (none)" : Cloud;
-        Fill(tunnels, rows.OrderBy(t => t.Tunnel, StringComparer.Ordinal).Select(t => t.Cells()));
+        Fill(tunnels, TunnelSummary.Rows(rows));
     }
 
     private static string[] MappingCells(LocalMappingStatus mapping)

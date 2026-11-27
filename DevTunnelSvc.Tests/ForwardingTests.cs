@@ -15,15 +15,17 @@ using Microsoft.DevTunnels.Ssh.Tcp;
 namespace DevTunnelSvc.Tests;
 
 [TestClass]
-public sealed class ForwardingTests
+public sealed class ForwardingTests : IDisposable
 {
+    private readonly CancellationTokenSource timeout = new(TimeSpan.FromSeconds(15));
+    private CancellationToken Token => timeout.Token;
+    public void Dispose() => timeout.Dispose();
+
     [TestMethod]
     [DataRow(false)]
     [DataRow(true)]
     public async Task HostMapsARelayChannelToTheTargetWithoutBindingTheTunnelPort(bool alreadyRegistered)
     {
-        using var limit = new CancellationTokenSource(TimeSpan.FromSeconds(15));
-        var ct = limit.Token;
         using var target = Listen();
         using var occupied = Listen();
         var tunnelPort = Port(occupied);
@@ -32,22 +34,21 @@ public sealed class ForwardingTests
         peer.Ports.MessageFactory = messages;
         peer.Ports.AcceptLocalConnectionsForForwardedPorts = false;
         using var handler = Api(tunnelPort, hosting: true, alreadyRegistered);
-        await using var backend = new TunnelBackend(() => Task.FromResult("local-test"), handler, peer);
-        await using var host = await backend.OpenAsync(Mapping.Create(true, "blue-tunnel.use2", tunnelPort, Port(target)), ct);
+        await using var backend = peer.Backend(handler);
+        await using var host = await backend.OpenAsync(Mapping.Create(true, "blue-tunnel.use2", tunnelPort, Port(target)), Token);
         Assert.AreEqual("Connected", host.State);
-        await peer.Ports.WaitForForwardedPortAsync(tunnelPort, ct);
-        using var channel = await peer.Ports.ConnectToForwardedPortAsync(tunnelPort, ct);
+        await peer.Ports.WaitForForwardedPortAsync(tunnelPort, Token);
+        using var channel = await peer.Ports.ConnectToForwardedPortAsync(tunnelPort, Token);
         Assert.IsNotNull(channel);
-        using var app = await target.AcceptTcpClientAsync(ct);
-        await RoundTripAsync(channel, app.GetStream(), ct);
+        using var app = await target.AcceptTcpClientAsync(Token);
+        await RoundTripAsync(channel, app.GetStream(), Token);
         Assert.IsFalse(occupied.Pending());
     }
 
     [TestMethod]
     public async Task ClientListensOnExactlyTheRequestedPortAndRefusesOtherTunnelPorts()
     {
-        using var limit = new CancellationTokenSource(TimeSpan.FromSeconds(15));
-        var ct = limit.Token;
+        var ct = Token;
         using var target = Listen();
         using var occupied = Listen();
         using var selection = Listen();
@@ -56,7 +57,7 @@ public sealed class ForwardingTests
         using var peer = new RelayPeer();
         using var handler = Api(tunnelPort);
         var events = new ConcurrentQueue<string>();
-        await using var backend = new TunnelBackend(() => Task.FromResult("local-test"), handler, peer, writeEvent: events.Enqueue);
+        await using var backend = peer.Backend(handler, events.Enqueue);
         var opening = backend.OpenAsync(Mapping.Create(false, "blue-tunnel.use2", tunnelPort, localPort), ct);
         await peer.Authenticated.Task.WaitAsync(ct);
         Assert.IsNull(await peer.Ports.ForwardFromRemotePortAsync(IPAddress.Loopback, Port(target), "127.0.0.1", Port(target), ct));
@@ -118,7 +119,7 @@ public sealed class ForwardingTests
         using var tunnelPort = Listen();
         using var peer = new RelayPeer();
         using var handler = Api(Port(tunnelPort));
-        await using var backend = new TunnelBackend(() => Task.FromResult("local-test"), handler, peer);
+        await using var backend = peer.Backend(handler);
         var opening = backend.OpenAsync(Mapping.Create(false, "blue-tunnel.use2", Port(tunnelPort), Port(conflict)), ct);
         await peer.Authenticated.Task.WaitAsync(ct);
         var announcement = peer.Ports.ForwardFromRemotePortAsync(IPAddress.Loopback, Port(tunnelPort), "127.0.0.1", Port(conflict), ct);
@@ -133,8 +134,7 @@ public sealed class ForwardingTests
     [TestMethod]
     public async Task EncryptedSdkClientAndHostForwardBytesAcrossThreeIndependentPorts()
     {
-        using var limit = new CancellationTokenSource(TimeSpan.FromSeconds(15));
-        var ct = limit.Token;
+        var ct = Token;
         using var appListener = Listen();
         using var occupied = Listen();
         using var reservation = Listen();
@@ -244,6 +244,9 @@ public sealed class ForwardingTests
         public TraceSource Trace { get; } = new("offline relay", SourceLevels.Off);
         public PortForwardingService Ports { get; }
         public TaskCompletionSource Authenticated { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        internal TunnelBackend Backend(HttpStub handler, Action<string>? log = null) =>
+            new(() => Task.FromResult("local-test"), handler, this, writeEvent: log);
 
         public RelayPeer(bool encrypted = false, bool allowForwarding = true)
         {

@@ -16,9 +16,8 @@ internal sealed class CredentialFile(string stateDirectory)
         StateFile.RejectLink(FilePath);
         try
         {
-            using var file = new FileStream(FilePath, FileMode.Open, FileAccess.Read, FileShare.Read | FileShare.Delete);
-            if (!OperatingSystem.IsWindows() && File.GetUnixFileMode(file.SafeFileHandle) != StateFile.OwnerFile)
-                throw new UnauthorizedAccessException("Saved credential file must have mode 0600. Fix its permissions or run 'logout'.");
+            using var file = StateFile.OpenSnapshot(FilePath);
+            StateFile.RequirePrivateFile(file, "Saved credential file must have mode 0600. Fix its permissions or run 'logout'.");
             var length = file.Length;
             if (length is <= 0 or > MaxSize)
                 throw new InvalidDataException("Invalid saved credential size. Run 'logout' and sign in again.");

@@ -1,4 +1,6 @@
+#!/usr/bin/env dotnet
 #:property PublishAot=false
+#:include Repository.cs
 #:package Microsoft.CodeAnalysis.AnalyzerUtilities
 #:package Microsoft.CodeAnalysis.CSharp.Workspaces
 #:package Microsoft.CodeAnalysis.Workspaces.MSBuild
@@ -10,10 +12,8 @@ using Microsoft.CodeAnalysis.CSharp.Syntax;
 using Microsoft.CodeAnalysis.MSBuild;
 
 const int maxSourceLines = 46, maxExecutableLines = 28;
-var root = Directory.GetParent((string)AppContext.GetData("EntryPointFileDirectoryPath")!)!.FullName;
-var projectFile = Path.Combine(root, "DevTunnelSvc", "DevTunnelSvc.csproj");
-var directory = Directory.CreateDirectory(Path.Combine(root, "artifacts", "metrics"));
-var report = Path.Combine(directory.FullName, "report.json");
+var projectFile = Path.Combine(Repository.Root, "DevTunnelSvc", "DevTunnelSvc.csproj");
+var report = Repository.ReportPath("metrics");
 File.Delete(report);
 
 // Also enforce the four SDK analyzer thresholds when this check runs outside CI.

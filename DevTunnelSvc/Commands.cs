@@ -63,7 +63,7 @@ internal sealed class Commands(TextReader input, TextWriter output, TextWriter e
         var pid = new Argument<int>("service-pid");
         var selected = new Argument<string?>("selected-version") { Arity = ArgumentArity.ZeroOrOne };
         var command = new Command(TrayMenu.UpdateWorker) { Hidden = true };
-        var tag = new Option<string?>(UpdateWorker.TagOption) { Hidden = true };
+        var tag = WorkerTagOption();
         command.Arguments.Add(pid);
         command.Arguments.Add(selected);
         command.Options.Add(tag);
@@ -85,7 +85,7 @@ internal sealed class Commands(TextReader input, TextWriter output, TextWriter e
     private Command AutoUpdateWorker()
     {
         var pid = new Argument<int>("service-pid");
-        var tag = new Option<string?>(UpdateWorker.TagOption) { Hidden = true };
+        var tag = WorkerTagOption();
         var command = Action(AutoUpdates.Worker, (r, ct) => localActions.Update(new(false, true, r.GetValue(tag), r.GetRequiredValue(pid)), ct));
         command.Hidden = true;
         command.Arguments.Add(pid);
@@ -97,13 +97,15 @@ internal sealed class Commands(TextReader input, TextWriter output, TextWriter e
     {
         var check = new Option<bool>("--check") { Description = "Check for a newer release without installing it or stopping the service." };
         var force = new Option<bool>("--force") { Description = "Without asking, stop a running service and its mappings, install a newer release, and start the service, even if it was stopped." };
-        var tag = new Option<string?>(UpdateWorker.TagOption) { Hidden = true };
+        var tag = WorkerTagOption();
         var command = Action("update", (r, ct) => localActions.Update(new(r.GetValue(check), r.GetValue(force), r.GetValue(tag)), ct));
         command.Options.Add(check);
         command.Options.Add(force);
         command.Options.Add(tag);
         return command;
     }
+
+    private static Option<string?> WorkerTagOption() => new(UpdateWorker.TagOption) { Hidden = true };
 
     private Command Create()
     {

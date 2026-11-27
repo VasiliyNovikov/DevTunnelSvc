@@ -5,8 +5,11 @@ using DevTunnelSvc.Service;
 namespace DevTunnelSvc.Tests;
 
 [TestClass]
-public sealed class LifetimeTests
+public sealed class LifetimeTests : IDisposable
 {
+    private readonly DirectoryInfo directory = Directory.CreateTempSubdirectory("devtunnel-lifetime-");
+    public void Dispose() => directory.Delete(true);
+
     [TestMethod]
     public async Task StartIsIdempotentAndWaitsForTheServiceToAnswer()
     {
@@ -22,31 +25,30 @@ public sealed class LifetimeTests
         Assert.AreEqual("ready", status);
         Assert.AreEqual(1, starts);
         Assert.AreEqual(3, attempts);
-        attempts = 0;
-        await Assert.ThrowsExactlyAsync<IOException>(() => ServiceLifetime.StartAsync(false, _ => { attempts++; throw new IOException("pipe access failed"); },
-            _ => Task.CompletedTask, limit.Token));
-        Assert.AreEqual(1, attempts);
-        attempts = 0;
-        await Assert.ThrowsExactlyAsync<IOException>(() => ServiceLifetime.StartAsync(false, _ =>
-        { attempts++; throw new IOException("not listening", new TimeoutException()); }, _ => Task.CompletedTask, limit.Token));
-        Assert.AreEqual(5, attempts);
+        async Task AssertFailedStart(IOException error, int expectedAttempts)
+        {
+            var probes = 0;
+            await Assert.ThrowsExactlyAsync<IOException>(() => ServiceLifetime.StartAsync(false, _ => { probes++; throw error; },
+                _ => Task.CompletedTask, limit.Token));
+            Assert.AreEqual(expectedAttempts, probes);
+        }
+        await AssertFailedStart(new IOException("pipe access failed"), 1);
+        await AssertFailedStart(new IOException("not listening", new TimeoutException()), 5);
     }
 
     [TestMethod]
     public async Task ServiceRunsAcrossCommandsAndReleasesLeaseOnShutdown()
     {
-        var directory = Directory.CreateTempSubdirectory("devtunnel-run-");
-        var name = $"devtunnel-{Guid.NewGuid():N}";
-        using var limit = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        using var pipe = new TestPipe(10);
         using var log = new StringWriter();
         using var owner = new MemoryStream();
-        var run = ServiceLifetime.RunAsync(log, name, directory.FullName, Cli.NoBackgroundUpdates, limit.Token, (pipeName, _, _, _) => { Assert.AreEqual(name, pipeName); return owner; });
+        var run = ServiceLifetime.RunAsync(log, pipe.Name, directory.FullName, Cli.NoBackgroundUpdates, pipe.Token, (name, _, _, _) => { Assert.AreEqual(pipe.Name, name); return owner; });
         try
         {
-            Assert.Contains("signed out", await Control.SendAsync(new("status"), name, limit.Token));
-            await Assert.ThrowsExactlyAsync<IOException>(() => ServiceLifetime.RunAsync(log, name, directory.FullName, Cli.NoBackgroundUpdates, limit.Token));
+            Assert.Contains("signed out", await pipe.SendAsync(new("status")));
+            await Assert.ThrowsExactlyAsync<IOException>(() => ServiceLifetime.RunAsync(log, pipe.Name, directory.FullName, Cli.NoBackgroundUpdates, pipe.Token));
             Assert.IsTrue(owner.CanWrite);
-            Assert.Contains("stopping", await Control.SendAsync(new("shutdown"), name, limit.Token));
+            Assert.Contains("stopping", await pipe.SendAsync(new("shutdown")));
             await run;
             Assert.IsFalse(owner.CanWrite);
             var history = File.ReadAllText(Path.Combine(directory.FullName, "app.log"));
@@ -57,58 +59,52 @@ public sealed class LifetimeTests
             using var lease = InstanceLease.Acquire(directory.FullName);
             Assert.IsTrue(lease.CanWrite);
         }
-        finally { await limit.CancelAsync(); await run; directory.Delete(true); }
+        finally { await pipe.StopAsync(run); }
     }
 
     [TestMethod]
     public async Task ServiceCancellationInterruptsAnIdleControlListener()
     {
-        var directory = Directory.CreateTempSubdirectory("devtunnel-cancel-");
-        using var stop = new CancellationTokenSource(TimeSpan.FromSeconds(10));
-        var run = ServiceLifetime.RunAsync(TextWriter.Null, $"devtunnel-{Guid.NewGuid():N}", directory.FullName, Cli.NoBackgroundUpdates, stop.Token);
-        try { await stop.CancelAsync(); await run.WaitAsync(TimeSpan.FromSeconds(3)); }
-        finally { directory.Delete(true); }
+        using var pipe = new TestPipe(10);
+        var run = RunService(pipe);
+        await pipe.StopAsync(run).WaitAsync(TimeSpan.FromSeconds(3));
     }
+
+    private Task RunService(TestPipe pipe, TrayLifetime.Factory? tray = null) =>
+        ServiceLifetime.RunAsync(TextWriter.Null, pipe.Name, directory.FullName, Cli.NoBackgroundUpdates, pipe.Token, tray);
 
     [TestMethod]
     [DataRow(false)]
     [DataRow(true)]
     public async Task SignInSurvivesServiceRecreationButLogoutSurvivesItToo(bool cancelFirstService)
     {
-        var directory = Directory.CreateTempSubdirectory("devtunnel-restart-");
-        var name = $"devtunnel-{Guid.NewGuid():N}";
-        using var limit = new CancellationTokenSource(TimeSpan.FromSeconds(15));
-        var ct = limit.Token;
+        using var pipe = new TestPipe(15);
         async Task RunOnce(Func<Task> commands, bool cancel = false)
         {
-            using var stop = CancellationTokenSource.CreateLinkedTokenSource(ct);
-            var service = ServiceLifetime.RunAsync(TextWriter.Null, name, directory.FullName, Cli.NoBackgroundUpdates, stop.Token);
+            using var stop = CancellationTokenSource.CreateLinkedTokenSource(pipe.Token);
+            var service = ServiceLifetime.RunAsync(TextWriter.Null, pipe.Name, directory.FullName, Cli.NoBackgroundUpdates, stop.Token);
             try
             {
                 await commands();
                 if (cancel) await stop.CancelAsync();
-                else await Control.SendAsync(new("shutdown"), name, ct);
+                else await pipe.SendAsync(new("shutdown"));
                 await service;
             }
             finally { await stop.CancelAsync(); await service; }
         }
-        try
+        await RunOnce(async () =>
         {
-            await RunOnce(async () =>
-            {
-                Assert.Contains("signed out", await Control.SendAsync(new("status"), name, ct));
-                Assert.Contains("saved", await Control.SendAsync(new("login", SignIn: new("test-only-account")), name, ct));
-            }, cancelFirstService);
-            await RunOnce(async () =>
-            {
-                var status = await Control.SendAsync(new("status"), name, ct);
-                Assert.Contains("signed in", status);
-                Assert.DoesNotContain("test-only-account", status);
-                Assert.Contains("removed", await Control.SendAsync(new("logout"), name, ct));
-            });
-            await RunOnce(async () => Assert.Contains("signed out", await Control.SendAsync(new("status"), name, ct)));
-        }
-        finally { directory.Delete(true); }
+            Assert.Contains("signed out", await pipe.SendAsync(new("status")));
+            Assert.Contains("saved", await pipe.SendAsync(new("login", SignIn: new("test-only-account"))));
+        }, cancelFirstService);
+        await RunOnce(async () =>
+        {
+            var status = await pipe.SendAsync(new("status"));
+            Assert.Contains("signed in", status);
+            Assert.DoesNotContain("test-only-account", status);
+            Assert.Contains("removed", await pipe.SendAsync(new("logout")));
+        });
+        await RunOnce(async () => Assert.Contains("signed out", await pipe.SendAsync(new("status"))));
     }
 
     [TestMethod]
@@ -116,25 +112,19 @@ public sealed class LifetimeTests
     [DataRow(true)]
     public async Task TrayExitStopsTheServiceAndOnlyFailuresAreReportedAsErrors(bool fail)
     {
-        var directory = Directory.CreateTempSubdirectory("devtunnel-tray-error-");
-        using var limit = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        using var pipe = new TestPipe(5);
         using var owner = new MemoryStream();
         Action<Exception?>? signal = null;
-        try
+        var service = RunService(pipe, (_, _, _, callback) => { signal = callback; return owner; });
+        Assert.IsNotNull(signal);
+        signal(fail ? new IOException("Explorer unavailable") : null);
+        if (fail)
         {
-            var service = ServiceLifetime.RunAsync(TextWriter.Null, $"devtunnel-{Guid.NewGuid():N}", directory.FullName, Cli.NoBackgroundUpdates, limit.Token,
-                (_, _, _, callback) => { signal = callback; return owner; });
-            Assert.IsNotNull(signal);
-            signal(fail ? new IOException("Explorer unavailable") : null);
-            if (fail)
-            {
-                var error = await Assert.ThrowsExactlyAsync<InvalidOperationException>(() => service.WaitAsync(limit.Token));
-                Assert.Contains("Explorer unavailable", error.Message);
-            }
-            else await service.WaitAsync(limit.Token);
-            Assert.IsFalse(owner.CanWrite);
+            var error = await Assert.ThrowsExactlyAsync<InvalidOperationException>(() => service.WaitAsync(pipe.Token));
+            Assert.Contains("Explorer unavailable", error.Message);
         }
-        finally { directory.Delete(true); }
+        else await service.WaitAsync(pipe.Token);
+        Assert.IsFalse(owner.CanWrite);
     }
 
     [TestMethod]

@@ -1,4 +1,6 @@
+#!/usr/bin/env dotnet
 #:property PublishAot=false
+#:include Repository.cs
 using System.Diagnostics;
 using System.Text.Json;
 using System.Xml.Linq;
@@ -9,7 +11,7 @@ if (args is not (["coverage"] or ["mutation"]))
     return 2;
 }
 
-var root = Directory.GetParent((string)AppContext.GetData("EntryPointFileDirectoryPath")!)!.FullName;
+var root = Repository.Root;
 var restore = Dotnet(root, "tool", "restore");
 if (restore != 0)
     return restore;

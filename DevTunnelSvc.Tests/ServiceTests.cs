@@ -15,6 +15,10 @@ public sealed class ServiceTests : IDisposable
     private SessionCredential credential = null!;
     private MappingFile mappings = null!;
     private readonly ConcurrentQueue<string> events = new();
+    private readonly TestBackend backend = new();
+    private static readonly Request Host = new("host", "blue-tunnel.use2", 8080, 3000);
+    private static readonly Request Connect = new("connect", "blue-tunnel.use2", 8080, 5000);
+    private static readonly string[] ConnectCommand = ["connect", "blue-tunnel.use2", "--tunnel-port", "8080", "--listen-port", "5000"];
 
     [TestInitialize]
     public void SetUp()
@@ -28,52 +32,63 @@ public sealed class ServiceTests : IDisposable
 
     private TunnelService CreateService(ITunnelBackend backend) => new(backend, credential, mappings, events.Enqueue);
 
+    private static Task<string> SignInAsync(TunnelService service, string token, CancellationToken ct = default) =>
+        service.ExecuteAsync(new("login", SignIn: new(token)), ct);
+
+    private static async Task AssertTunnelAbsentAsync(TunnelService service, CancellationToken ct) =>
+        Assert.DoesNotContain("blue-tunnel", await service.ExecuteAsync(new("status"), ct));
+
+    private async Task<TunnelService> SignedInServiceAsync(string token)
+    {
+        var service = CreateService(backend);
+        try { await SignInAsync(service, token); return service; }
+        catch { await service.DisposeAsync(); throw; }
+    }
+
     [TestMethod]
     public async Task CliConnectionsSurviveTheirCallerAndReleaseResourcesOnStop()
     {
-        var backend = new TestBackend();
         await using var state = CreateService(backend);
-        var name = $"DevTunnelSvc-test-{Guid.NewGuid():N}";
-        using var limit = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+        using var pipe = new TestPipe(15);
         using var log = new StringWriter();
-        var server = ControlServer.RunAsync(name, state.ExecuteAsync, log, events.Enqueue, limit.Token);
-        Task<string> Send(Request r, CancellationToken ct) => Control.SendAsync(r, name, ct);
+        var server = pipe.ServeAsync(state, log, events.Enqueue);
         try
         {
-            Assert.Contains("signed out", await Send(new("status"), limit.Token));
-            Assert.Contains("login", (await Assert.ThrowsExactlyAsync<InvalidOperationException>(() => Send(new("create"), limit.Token))).Message);
-            Assert.Contains("Signed in", await Send(new("login", SignIn: new("test-credential")), limit.Token));
-            Assert.AreEqual("blue-tunnel.use2", await Send(new("create"), limit.Token));
+            Assert.Contains("signed out", await pipe.SendAsync(new("status")));
+            Assert.Contains("login", (await Assert.ThrowsExactlyAsync<InvalidOperationException>(() => pipe.SendAsync(new("create")))).Message);
+            Assert.Contains("Signed in", await pipe.SendAsync(new("login", SignIn: new("test-credential"))));
+            Assert.AreEqual("blue-tunnel.use2", await pipe.SendAsync(new("create")));
             using var output = new StringWriter();
             using var error = new StringWriter();
-            Assert.AreEqual(0, await Cli.RunAsync(["host", "blue-tunnel.use2", "--tunnel-port", "8080", "--target-port", "3000"], output, error, Send));
-            Assert.AreEqual(0, await Cli.RunAsync(["connect", "blue-tunnel.use2", "--tunnel-port", "8080", "--listen-port", "5000"], output, error, Send));
+            Task<int> Run(params string[] args) => Cli.RunAsync(args, output, error, pipe.SendAsync);
+            Assert.AreEqual(0, await Run("host", "blue-tunnel.use2", "--tunnel-port", "8080", "--target-port", "3000"));
+            Assert.AreEqual(0, await Run(ConnectCommand));
             Assert.Contains("connect:blue-tunnel.use2:5000", output.ToString());
             Assert.Contains("host:blue-tunnel.use2", output.ToString());
             Assert.IsEmpty(error.ToString());
             Assert.AreEqual((8080, 3000), (backend.Sessions[0].Map.TunnelPort, backend.Sessions[0].Map.LocalPort));
             Assert.AreEqual((8080, 5000), (backend.Sessions[1].Map.TunnelPort, backend.Sessions[1].Map.LocalPort));
-            var status = await Send(new("status"), limit.Token);
+            var status = await pipe.SendAsync(new("status"));
             Assert.StartsWith("Service running; signed in.", status);
             Assert.Contains("localhost:5000 -> blue-tunnel.use2:8080", status);
             Assert.Contains("blue-tunnel.use2:8080 -> localhost:3000", status);
             Assert.DoesNotContain("test-credential", status);
-            var details = JsonSerializer.Deserialize(await Send(new(LocalStatus.Command), limit.Token), StatusJson.Default.LocalStatus)!;
+            var details = JsonSerializer.Deserialize(await pipe.SendAsync(new(LocalStatus.Command)), StatusJson.Default.LocalStatus)!;
             Assert.IsTrue(details.SignedIn);
             CollectionAssert.AreEquivalent(new LocalMappingStatus[] { new(true, "blue-tunnel.use2", 8080, 3000, "Connected"),
                 new(false, "blue-tunnel.use2", 8080, 5000, "Connected") }, details.Mappings);
-            Assert.Contains("Stop", (await Assert.ThrowsExactlyAsync<InvalidOperationException>(() => Send(new("delete", "blue-tunnel.use2"), limit.Token))).Message);
-            Assert.AreEqual(0, await Cli.RunAsync(["stop", "host:blue-tunnel.use2"], output, error, Send));
+            Assert.Contains("Stop", (await Assert.ThrowsExactlyAsync<InvalidOperationException>(() => pipe.SendAsync(new("delete", "blue-tunnel.use2")))).Message);
+            Assert.AreEqual(0, await Run("stop", "host:blue-tunnel.use2"));
             Assert.IsTrue(backend.Sessions[0].Disposed);
             Assert.IsFalse(backend.Sessions[1].Disposed);
-            Assert.AreEqual(0, await Cli.RunAsync(["logout"], output, error, Send));
+            Assert.AreEqual(0, await Run("logout"));
             Assert.Contains("Signed out", output.ToString());
-            Assert.Contains("signed out", await Send(new("status"), limit.Token));
+            Assert.Contains("signed out", await pipe.SendAsync(new("status")));
             Assert.IsTrue(backend.Sessions[1].Disposed);
-            await Send(new("shutdown"), limit.Token);
+            await pipe.SendAsync(new("shutdown"));
             await server;
         }
-        finally { await limit.CancelAsync(); await server; }
+        finally { await pipe.StopAsync(server); }
     }
 
     [TestMethod]
@@ -81,28 +96,29 @@ public sealed class ServiceTests : IDisposable
     {
         var backend = new TestBackend { Fail = true };
         await using var state = CreateService(backend);
-        await state.ExecuteAsync(new("login", SignIn: new("token")), CancellationToken.None);
-        using var output = new StringWriter();
-        using var error = new StringWriter();
-        Assert.AreNotEqual(0, await Cli.RunAsync(["connect", "blue-tunnel.use2", "--tunnel-port", "8080", "--listen-port", "5000"], output, error, state.ExecuteAsync));
-        Assert.Contains("permission denied", error.ToString());
-        Assert.DoesNotContain("blue-tunnel", await state.ExecuteAsync(new("status"), CancellationToken.None));
+        await SignInAsync(state, "token");
+        var result = await Cli.CaptureAsync(ConnectCommand, state.ExecuteAsync);
+        Assert.AreNotEqual(0, result.Code);
+        Assert.Contains("permission denied", result.Error);
+        await AssertTunnelAbsentAsync(state, CancellationToken.None);
         foreach (var request in new[] { new Request("host", "blue-tunnel.use2", 0, 3000), new("connect", "blue-tunnel.use2", 8080, 65536), new("connect", "bad/id.use2", 1, 2) })
             await Assert.ThrowsExactlyAsync<ArgumentException>(() => state.ExecuteAsync(request, CancellationToken.None));
         Assert.Contains("protocol", (await Assert.ThrowsExactlyAsync<InvalidDataException>(() => state.ExecuteAsync(new("status", Version: 1), CancellationToken.None))).Message);
         Assert.Contains("Unknown service command", (await Assert.ThrowsExactlyAsync<ArgumentException>(() => state.ExecuteAsync(new("unknown"), CancellationToken.None))).Message);
-        Assert.IsEmpty(backend.Sessions);
-        Assert.IsEmpty(mappings.Read());
+        AssertNoMappings(backend);
     }
 
     [TestMethod]
     public async Task LegacyEphemeralHostRequestCannotCreateADurableMapping()
     {
-        var backend = new TestBackend();
-        await using var service = CreateService(backend);
-        await service.ExecuteAsync(new("login", SignIn: new("test-token")), CancellationToken.None);
+        await using var service = await SignedInServiceAsync("test-token");
         await Assert.ThrowsExactlyAsync<InvalidDataException>(() =>
             service.ExecuteAsync(new("host", "blue-tunnel.use2", 8080, 3000, Version: 2), CancellationToken.None));
+        AssertNoMappings(backend);
+    }
+
+    private void AssertNoMappings(TestBackend backend)
+    {
         Assert.IsEmpty(backend.Sessions);
         Assert.IsEmpty(mappings.Read());
     }
@@ -117,7 +133,7 @@ public sealed class ServiceTests : IDisposable
         var first = new TestBackend();
         await using (var service = CreateService(first))
         {
-            await service.ExecuteAsync(new("login", SignIn: new("test-only-token")), ct);
+            await SignInAsync(service, "test-only-token", ct);
             await service.ExecuteAsync(new("host", host.Tunnel.ToString(), host.TunnelPort, host.LocalPort), ct);
             await service.ExecuteAsync(new("connect", client.Tunnel.ToString(), client.TunnelPort, client.LocalPort), ct);
             await service.ExecuteAsync(new("shutdown-for-update", ServicePid: Environment.ProcessId), ct);
@@ -213,12 +229,10 @@ public sealed class ServiceTests : IDisposable
     [TestMethod]
     public async Task FailedSaveDoesNotLeaveAnUnrecordedRelayOrForgetAWorkingOne()
     {
-        var backend = new TestBackend();
-        await using var service = CreateService(backend);
+        await using var service = await SignedInServiceAsync("test-token");
         var ct = CancellationToken.None;
-        await service.ExecuteAsync(new("login", SignIn: new("test-token")), ct);
-        await service.ExecuteAsync(new("host", "blue-tunnel.use2", 8080, 3000), ct);
-        await service.ExecuteAsync(new("connect", "blue-tunnel.use2", 8080, 5000), ct);
+        await service.ExecuteAsync(Host, ct);
+        await service.ExecuteAsync(Connect, ct);
         Directory.CreateDirectory(Path.Combine(stateDirectory.FullName, "mappings.json.pending"));
         await Assert.ThrowsExactlyAsync<UnauthorizedAccessException>(() => service.ExecuteAsync(new("connect", "blue-tunnel.use2", 8080, 5001), ct));
         Assert.IsTrue(backend.Sessions[2].Disposed);
@@ -231,11 +245,9 @@ public sealed class ServiceTests : IDisposable
     [TestMethod]
     public async Task LogoutStillClosesRelaysAndRemovesTheGrantWhenForgettingFails()
     {
-        var backend = new TestBackend();
-        await using var service = CreateService(backend);
+        await using var service = await SignedInServiceAsync("old-account");
         var ct = CancellationToken.None;
-        await service.ExecuteAsync(new("login", SignIn: new("old-account")), ct);
-        await service.ExecuteAsync(new("host", "blue-tunnel.use2", 8080, 3000), ct);
+        await service.ExecuteAsync(Host, ct);
         var path = Path.Combine(stateDirectory.FullName, "mappings.json");
         File.Delete(path);
         Directory.CreateDirectory(path);
@@ -249,18 +261,16 @@ public sealed class ServiceTests : IDisposable
     [TestMethod]
     public async Task AFailedDisconnectKeepsTheRelayOwnedButNeverSavesItAgain()
     {
-        var backend = new TestBackend();
-        await using var service = CreateService(backend);
-        var ct = CancellationToken.None;
-        await service.ExecuteAsync(new("login", SignIn: new("test-token")), ct);
-        await service.ExecuteAsync(new("connect", "blue-tunnel.use2", 8080, 5000), ct);
+        await using var service = await SignedInServiceAsync("test-token");
+        Task<string> Send(Request request) => service.ExecuteAsync(request, CancellationToken.None);
+        await Send(Connect);
         var client = backend.Sessions.Single();
         client.FailCloseOnce = true;
-        await Assert.ThrowsExactlyAsync<IOException>(() => service.ExecuteAsync(new("disconnect", client.Map.Name), ct));
-        Assert.Contains("Close failed (not saved)", await service.ExecuteAsync(new("status"), ct));
-        await service.ExecuteAsync(new("host", "blue-tunnel.use2", 8080, 3000), ct);
+        await Assert.ThrowsExactlyAsync<IOException>(() => Send(new("disconnect", client.Map.Name)));
+        Assert.Contains("Close failed (not saved)", await Send(new("status")));
+        await Send(Host);
         Assert.IsTrue(mappings.Read().Single().Host);
-        await service.ExecuteAsync(new("disconnect", client.Map.Name), ct);
+        await Send(new("disconnect", client.Map.Name));
         Assert.IsTrue(client.Disposed);
     }
 
@@ -284,36 +294,35 @@ public sealed class ServiceTests : IDisposable
         var ct = CancellationToken.None;
         await Assert.ThrowsExactlyAsync<ArgumentException>(() => service.ExecuteAsync(new("login"), ct));
         Assert.Contains("credential", (await Assert.ThrowsExactlyAsync<ArgumentException>(() => service.ExecuteAsync(new("login", SignIn: new("two words")), ct))).Message);
-        await service.ExecuteAsync(new("login", SignIn: new("token")), ct);
-        var request = new Request("host", "blue-tunnel.use2", 8080, 3000);
-        await service.ExecuteAsync(request, ct);
-        Assert.Contains("already exists", (await Assert.ThrowsExactlyAsync<InvalidOperationException>(() => service.ExecuteAsync(request, ct))).Message);
+        await SignInAsync(service, "token");
+        await service.ExecuteAsync(Host, ct);
+        Assert.Contains("already exists", (await Assert.ThrowsExactlyAsync<InvalidOperationException>(() => service.ExecuteAsync(Host, ct))).Message);
         Assert.Contains("Stop active", (await Assert.ThrowsExactlyAsync<InvalidOperationException>(() => service.ExecuteAsync(new("login", SignIn: new("other")), ct))).Message);
         await Assert.ThrowsExactlyAsync<ArgumentException>(() => service.ExecuteAsync(new("stop"), ct));
         await Assert.ThrowsExactlyAsync<ArgumentException>(() => service.ExecuteAsync(new("stop", "missing"), ct));
         await service.ExecuteAsync(new("stop", "host:blue-tunnel.use2"), ct);
         Assert.Contains("Deleted blue-tunnel.use2", await service.ExecuteAsync(new("delete", "blue-tunnel.use2"), ct));
-        Assert.DoesNotContain("blue-tunnel", await service.ExecuteAsync(new("status"), ct));
+        await AssertTunnelAbsentAsync(service, ct);
     }
 
     [TestMethod]
     public async Task ListShowsTheAccountsTunnelsOnlyAfterSignIn()
     {
-        var backend = new TestBackend();
         await using var service = CreateService(backend);
-        using var output = new StringWriter();
-        using var error = new StringWriter();
-        Assert.AreEqual(1, await Cli.RunAsync(["list"], output, error, service.ExecuteAsync));
-        Assert.Contains("Run 'login' first", error.ToString());
-        Assert.IsEmpty(output.ToString());
-        await service.ExecuteAsync(new("login", SignIn: new("token")), CancellationToken.None);
-        Assert.AreEqual(0, await Cli.RunAsync(["list"], output, error, service.ExecuteAsync));
-        Assert.AreEqual("No tunnels found. Run 'create' to create one." + Environment.NewLine, output.ToString());
-        output.GetStringBuilder().Clear();
+        Task<(int Code, string Output, string Error)> List() => Cli.CaptureAsync(["list"], service.ExecuteAsync);
+        var anonymous = await List();
+        Assert.AreEqual(1, anonymous.Code);
+        Assert.Contains("Run 'login' first", anonymous.Error);
+        Assert.IsEmpty(anonymous.Output);
+        await SignInAsync(service, "token");
+        var empty = await List();
+        Assert.AreEqual(0, empty.Code);
+        Assert.AreEqual("No tunnels found. Run 'create' to create one." + Environment.NewLine, empty.Output);
         backend.Tunnels.Add(new("blue-tunnel.use2", 1, null, null, [8080]));
-        Assert.AreEqual(0, await Cli.RunAsync(["list"], output, error, service.ExecuteAsync));
+        var result = await List();
+        Assert.AreEqual(0, result.Code);
         Assert.AreEqual(string.Join(Environment.NewLine, "TUNNEL            HOSTS  CLIENTS  EXPIRES  PORTS",
-            "blue-tunnel.use2  1      -        -        8080", ""), output.ToString());
+            "blue-tunnel.use2  1      -        -        8080", ""), result.Output);
     }
 
     [TestMethod]
@@ -339,7 +348,7 @@ public sealed class ServiceTests : IDisposable
             Assert.AreEqual(1, await Cli.RunAsync(command, output, error, service.ExecuteAsync));
             Assert.Contains("Run 'login' first", error.ToString());
         }
-        await service.ExecuteAsync(new("login", SignIn: new("token")), CancellationToken.None);
+        await SignInAsync(service, "token");
         foreach (var command in remoteCommands.Append(["create"]))
             Assert.AreEqual(0, await Cli.RunAsync(command, output, error, service.ExecuteAsync));
         // Fastest first, ties by name, unmeasured last; no footer without a recommended region.
@@ -406,46 +415,41 @@ public sealed class ServiceTests : IDisposable
     [TestMethod]
     public async Task ShutdownClosesActiveSessionsButPreservesTheSignIn()
     {
-        var backend = new TestBackend();
-        await using var service = CreateService(backend);
+        await using var service = await SignedInServiceAsync("user-token");
         var ct = CancellationToken.None;
-        await service.ExecuteAsync(new("login", SignIn: new("user-token")), ct);
         Assert.AreEqual("user-token", await credential.RequireTokenAsync(ct));
         var missing = await Assert.ThrowsExactlyAsync<InvalidOperationException>(() => service.ExecuteAsync(new("delete", "missing-tunnel.use2"), ct));
         Assert.Contains("not found", missing.Message);
-        await service.ExecuteAsync(new("host", "blue-tunnel.use2", 8080, 3000), ct);
+        await service.ExecuteAsync(Host, ct);
         Assert.Contains("stopping", await service.ExecuteAsync(new("shutdown"), ct));
         Assert.IsTrue(backend.Sessions.Single().Disposed);
         Assert.AreEqual("user-token", await credential.RequireTokenAsync(ct));
-        Assert.DoesNotContain("blue-tunnel", await service.ExecuteAsync(new("status"), ct));
+        await AssertTunnelAbsentAsync(service, ct);
     }
 
     [TestMethod]
     public async Task TrayUpdateStopsOnlyItsOriginalServiceAndPreservesSavedSignIn()
     {
-        var backend = new TestBackend();
         await using var state = CreateService(backend);
-        var name = $"DevTunnelSvc-tray-update-{Guid.NewGuid():N}";
-        using var limit = new CancellationTokenSource(TimeSpan.FromSeconds(10));
-        var server = ControlServer.RunAsync(name, state.ExecuteAsync, TextWriter.Null, events.Enqueue, limit.Token);
-        Task<string> Send(Request r) => Control.SendAsync(r, name, limit.Token);
+        using var pipe = new TestPipe(10);
+        var server = pipe.ServeAsync(state, TextWriter.Null, events.Enqueue);
         try
         {
-            await Send(new("login", SignIn: new("test-only-token")));
-            await Send(new("host", "blue-tunnel.use2", 8080, 3000));
+            await pipe.SendAsync(new("login", SignIn: new("test-only-token")));
+            await pipe.SendAsync(Host);
             foreach (var pid in new int?[] { null, -1 })
                 Assert.Contains("instance has changed", (await Assert.ThrowsExactlyAsync<InvalidOperationException>(
-                    () => Send(new("shutdown-for-update", ServicePid: pid)))).Message);
+                    () => pipe.SendAsync(new("shutdown-for-update", ServicePid: pid)))).Message);
             Assert.IsFalse(backend.Sessions.Single().Disposed);
-            Assert.Contains("host:blue-tunnel", await Send(new("status")));
-            var target = await Send(new("service-pid"));
+            Assert.Contains("host:blue-tunnel", await pipe.SendAsync(new("status")));
+            var target = await pipe.SendAsync(new("service-pid"));
             Assert.AreEqual(Environment.ProcessId.ToString(System.Globalization.CultureInfo.InvariantCulture), target);
-            await DevTunnelSvc.Updates.UpdateHandoff.StopAsync(Environment.ProcessId, (request, t) => Control.SendAsync(request, name, t), limit.Token);
-            await server.WaitAsync(limit.Token);
+            await DevTunnelSvc.Updates.UpdateHandoff.StopAsync(Environment.ProcessId, pipe.SendAsync, pipe.Token);
+            await server.WaitAsync(pipe.Token);
             Assert.IsTrue(backend.Sessions.Single().Disposed);
-            Assert.AreEqual("test-only-token", await credential.RequireTokenAsync(limit.Token));
+            Assert.AreEqual("test-only-token", await credential.RequireTokenAsync(pipe.Token));
         }
-        finally { await limit.CancelAsync(); await server; }
+        finally { await pipe.StopAsync(server); }
     }
 
     [TestMethod]

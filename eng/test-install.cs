@@ -1,10 +1,12 @@
+#!/usr/bin/env dotnet
 #:property PublishAot=false
+#:include FixtureFiles.cs
 using System.Diagnostics;
 using System.IO.Compression;
 using System.Runtime.InteropServices;
-using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using static FixtureFiles;
 
 if (!(OperatingSystem.IsWindows() || OperatingSystem.IsLinux()) || RuntimeInformation.ProcessArchitecture is not (Architecture.X64 or Architecture.Arm64))
 {
@@ -59,7 +61,7 @@ static async Task TestInstallAsync(DirectoryInfo fixture, string installer, stri
     var windows = OperatingSystem.IsWindows();
     var root = fixture.FullName;
     var home = fixture.CreateSubdirectory("user home").FullName;
-    var target = windows ? Path.Combine(home, "Programs", "DevTunnelSvc", "devtunnelsvc.exe") : Path.Combine(home, ".local", "bin", "devtunnelsvc");
+    var target = InstalledCli(home);
     var payload = Path.Combine(root, "payload");
     const string initialPath = @"%SystemRoot%\existing";
     if (windows)
@@ -155,12 +157,6 @@ static void WriteMetadata(string root, string payload, string assetName, bool ba
     var asset = new { name = assetName, state = "uploaded", size = new FileInfo(payload).Length, digest };
     var release = new { tag_name = "v1.2.3", draft = false, prerelease = false, assets = new[] { asset } };
     File.WriteAllBytes(Path.Combine(root, "release.json"), JsonSerializer.SerializeToUtf8Bytes(release));
-}
-
-static string HashFile(string path)
-{
-    using var file = File.OpenRead(path);
-    return Convert.ToHexStringLower(SHA256.HashData(file));
 }
 
 static void ExpectCalls(string root, params string[] expected)

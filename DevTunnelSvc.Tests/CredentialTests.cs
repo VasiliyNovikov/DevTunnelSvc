@@ -127,9 +127,8 @@ public sealed class CredentialTests
         var second = session.RequireTokenAsync(limit.Token);
         proceed.SetResult();
         CollectionAssert.AreEqual(new[] { Rotated.AccessToken, Rotated.AccessToken }, await Task.WhenAll(first, second));
-        Assert.AreEqual(1, count);
-        Assert.AreEqual(Rotated, file.Read());
-        using var restarted = new SessionCredential(new(directory.FullName), (_, _) => throw new AssertFailedException(), new Clock(now));
+        AssertRotatedOnce(count);
+        using var restarted = WithoutRefresh(new(directory.FullName));
         Assert.AreEqual(Rotated.AccessToken, await restarted.RequireTokenAsync(limit.Token));
     }
 
@@ -166,14 +165,13 @@ public sealed class CredentialTests
         Assert.AreEqual(Initial, file.Read());
         Directory.Delete(staged);
         Assert.AreEqual(Rotated.AccessToken, await session.RequireTokenAsync(CancellationToken.None));
-        Assert.AreEqual(1, count);
-        Assert.AreEqual(Rotated, file.Read());
+        AssertRotatedOnce(count);
     }
 
     [TestMethod]
     public async Task NonExpiringAndStillValidUnrefreshableTokensWorkUntilTheirActualExpiry()
     {
-        using var session = new SessionCredential(file, (_, _) => throw new AssertFailedException(), new Clock(now));
+        using var session = WithoutRefresh(file);
         await session.ReplaceAsync(new("legacy-token"), CancellationToken.None);
         Assert.AreEqual("legacy-token", await session.RequireTokenAsync(CancellationToken.None));
         file.Write(Initial with { RefreshExpiresAt = now });
@@ -189,17 +187,15 @@ public sealed class CredentialTests
     {
         using var http = new HttpClient(new HttpStub(async (r, ct) =>
         {
-            Assert.AreEqual(HttpMethod.Post, r.Method);
+            var fields = await HttpStub.GitHubFormAsync(r, ct);
             Assert.AreEqual("https://github.com/login/oauth/access_token", r.RequestUri!.AbsoluteUri);
-            var fields = System.Web.HttpUtility.ParseQueryString(await r.Content!.ReadAsStringAsync(ct));
             Assert.AreEqual(3, fields.Count);
             Assert.AreEqual("refresh_token", fields["grant_type"]);
             Assert.AreEqual(Initial.RefreshToken, fields["refresh_token"]);
-            Assert.AreEqual(Microsoft.DevTunnels.Contracts.TunnelServiceProperties.Production.GitHubAppClientId, fields["client_id"]);
             return HttpStub.Json("""{"access_token":"new-access","expires_in":120,"refresh_token":"new-refresh","refresh_token_expires_in":600}""");
         }));
         file.Write(Initial);
-        using var session = new SessionCredential(file, (s, ct) => GitHubOAuth.RefreshAsync(http, s, ct), new Clock(now));
+        using var session = RefreshingWith(http);
         var before = DateTimeOffset.UtcNow;
         using var api = new HttpStub((request, _) =>
         {
@@ -224,17 +220,13 @@ public sealed class CredentialTests
     {
         file.Write(Initial);
         var outage = true;
-        using var http = new HttpClient(new HttpStub((_, _) =>
-        {
-            var response = HttpStub.Json($$"""{"error":"{{errorCode}}","error_description":"synthetic-private-data"}""");
-            response.StatusCode = outage ? HttpStatusCode.ServiceUnavailable : status;
-            return Task.FromResult(response);
-        }));
-        using var session = new SessionCredential(file, (token, ct) => GitHubOAuth.RefreshAsync(http, token, ct), new Clock(now));
-        await Assert.ThrowsExactlyAsync<HttpRequestException>(() => session.RequireTokenAsync(CancellationToken.None));
+        using var http = HttpStub.Respond(_ => HttpStub.Json($$"""{"error":"{{errorCode}}","error_description":"synthetic-private-data"}""",
+            outage ? HttpStatusCode.ServiceUnavailable : status));
+        using var session = RefreshingWith(http);
+        await TokenFailsAsync<HttpRequestException>(session);
         Assert.AreEqual(Initial, file.Read());
         outage = false;
-        var error = await Assert.ThrowsExactlyAsync<SignInExpiredException>(() => session.RequireTokenAsync(CancellationToken.None));
+        var error = await TokenFailsAsync<SignInExpiredException>(session);
         Assert.Contains("login", error.Message);
         Assert.DoesNotContain("synthetic-private-data", error.ToString());
         Assert.IsNull(file.Read());
@@ -258,16 +250,23 @@ public sealed class CredentialTests
     public async Task IncompleteOrMalformedRefreshDoesNotReplaceTheSavedPair(string payload, HttpStatusCode status)
     {
         file.Write(Initial);
-        using var http = new HttpClient(new HttpStub((_, _) =>
-        {
-            var response = HttpStub.Json(payload);
-            response.StatusCode = status;
-            return Task.FromResult(response);
-        }));
-        using var session = new SessionCredential(file, (token, ct) => GitHubOAuth.RefreshAsync(http, token, ct), new Clock(now));
-        var error = await Assert.ThrowsExactlyAsync<InvalidDataException>(() => session.RequireTokenAsync(CancellationToken.None));
+        using var http = HttpStub.Respond(_ => HttpStub.Json(payload, status));
+        using var session = RefreshingWith(http);
+        var error = await TokenFailsAsync<InvalidDataException>(session);
         Assert.DoesNotContain("sensitive", error.Message);
         Assert.AreEqual(Initial, file.Read());
+    }
+
+    private static Task<T> TokenFailsAsync<T>(SessionCredential session) where T : Exception =>
+        Assert.ThrowsExactlyAsync<T>(() => session.RequireTokenAsync(CancellationToken.None));
+
+    private SessionCredential RefreshingWith(HttpClient http) => new(file, (token, ct) => GitHubOAuth.RefreshAsync(http, token, ct), new Clock(now));
+    private static SessionCredential WithoutRefresh(CredentialFile store) => new(store, (_, _) => throw new AssertFailedException("Unexpected refresh."), new Clock(now));
+
+    private void AssertRotatedOnce(int count)
+    {
+        Assert.AreEqual(1, count);
+        Assert.AreEqual(Rotated, file.Read());
     }
 
     private sealed class Clock(DateTimeOffset now) : TimeProvider

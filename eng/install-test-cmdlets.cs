@@ -80,11 +80,15 @@ namespace DevTunnelSvc.InstallerTests
         }
     }
 
-    [Cmdlet("Get", "FixtureRelease"), Alias("Invoke-RestMethod")]
-    public sealed class GetFixtureRelease : PSCmdlet
+    public abstract class FixtureWebRequest : PSCmdlet
     {
         [Parameter(Mandatory = true)] public string Uri { get; set; }
         [Parameter] public SwitchParameter UseBasicParsing { get; set; }
+    }
+
+    [Cmdlet("Get", "FixtureRelease"), Alias("Invoke-RestMethod")]
+    public sealed class GetFixtureRelease : FixtureWebRequest
+    {
         protected override void ProcessRecord()
         {
             Fixture.Require(Uri == "https://api.github.com/repos/VasiliyNovikov/DevTunnelSvc/releases/latest", "Unexpected metadata URL.");
@@ -99,11 +103,9 @@ namespace DevTunnelSvc.InstallerTests
     }
 
     [Cmdlet("Copy", "FixtureAsset"), Alias("Invoke-WebRequest")]
-    public sealed class CopyFixtureAsset : Cmdlet
+    public sealed class CopyFixtureAsset : FixtureWebRequest
     {
-        [Parameter(Mandatory = true)] public string Uri { get; set; }
         [Parameter(Mandatory = true)] public string OutFile { get; set; }
-        [Parameter] public SwitchParameter UseBasicParsing { get; set; }
         protected override void ProcessRecord()
         {
             var root = Fixture.Root;
