@@ -57,9 +57,18 @@ static void TestUpdate(DirectoryInfo work, Scenario scenario, string oldImage, s
         cli.Run(["service", "start"]);
         var before = cli.Run(["smoke-pid"]);
         if (scenario == Scenario.StartFailure) File.WriteAllText(Path.Combine(state, "reject-start"), "");
-        var reply = cli.Run(["update", "--force"], scenario == Scenario.Success ? 0 : 1);
+        string reply;
+        if (scenario == Scenario.Automatic)
+        {
+            Expect(cli.Run(["auto-update", "status"]), "disabled");
+            reply = cli.WithInput(["auto-update", "enable"], "yes");
+            Expect(reply, "connections will be interrupted", "Auto-update is enabled.");
+            WaitForAutomaticUpdate(state, install);
+        }
+        else reply = cli.Run(["update", "--force"], scenario == Scenario.Success ? 0 : 1);
         var log = File.ReadAllText(Path.Combine(state, "app.log"));
-        Expect(log, $"[{before}] [service] Control pipe ready.", "[update] Launching stable update worker.", $"Stopping service PID {before}.");
+        Expect(log, $"[{before}] [service] Control pipe ready.", "[update] Launching stable update worker.",
+            scenario == Scenario.Automatic ? $"Requesting automatic update of service PID {before}." : $"Stopping service PID {before}.");
         if (HashFile(exe) != HashFile(scenario == Scenario.BadDigest ? oldImage : newImage))
             throw new InvalidDataException($"Wrong installed executable after {scenario}.");
         if (install.EnumerateDirectories().Any()) throw new InvalidDataException($"Update helper left behind after {scenario}.");
@@ -78,6 +87,11 @@ static void TestUpdate(DirectoryInfo work, Scenario scenario, string oldImage, s
             if (scenario == Scenario.BadDigest) Expect(reply, "SHA-256");
             else
             {
+                if (scenario == Scenario.Automatic)
+                {
+                    Expect(cli.Run(["auto-update", "status"]), "enabled");
+                    Expect(cli.Run(["auto-update", "disable"]), "disabled");
+                }
                 Expect(cli.Run(["update", "--force"]), "Already up to date");
                 if (cli.Run(["smoke-pid"]) != after) throw new InvalidOperationException("Restarted an up-to-date service.");
             }
@@ -85,6 +99,20 @@ static void TestUpdate(DirectoryInfo work, Scenario scenario, string oldImage, s
     }
     finally { cli.StopIfRunning(); }
     Console.WriteLine($"Published update: {scenario} passed.");
+}
+
+static void WaitForAutomaticUpdate(string state, DirectoryInfo installation)
+{
+    var clock = Stopwatch.StartNew();
+    var log = "";
+    while (clock.Elapsed < TimeSpan.FromSeconds(60))
+    {
+        using (var stream = new FileStream(Path.Combine(state, "app.log"), FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete))
+        using (var reader = new StreamReader(stream)) log = reader.ReadToEnd();
+        if (log.Contains("[update] Update worker completed.", StringComparison.Ordinal) && !installation.EnumerateDirectories().Any()) return;
+        Thread.Sleep(150);
+    }
+    throw new TimeoutException($"The isolated automatic updater did not finish:\n{log}");
 }
 
 static string HashFile(string path)
@@ -99,15 +127,19 @@ static void Expect(string actual, params string[] fragments)
         if (!actual.Contains(expected, StringComparison.Ordinal)) throw new InvalidDataException($"Missing '{expected}' in: {actual}");
 }
 
-internal enum Scenario { Success, BadDigest, StartFailure }
+internal enum Scenario { Success, BadDigest, StartFailure, Automatic }
 
 internal sealed class FixtureCli(string image, string state)
 {
-    internal string Run(string[] args, params int[] expectedExitCodes)
+    internal string Run(string[] args, params int[] expectedExitCodes) => WithInput(args, null, expectedExitCodes);
+
+    internal string WithInput(string[] args, string? input, params int[] expectedExitCodes)
     {
         var info = new ProcessStartInfo(image, args) { UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true, RedirectStandardError = true };
+        info.RedirectStandardInput = input is not null;
         info.Environment["DEVTUNNELSVC_SMOKE_STATE"] = state;
         using var process = Process.Start(info)!;
+        if (input is not null) { process.StandardInput.WriteLine(input); process.StandardInput.Close(); }
         using var drain = new CancellationTokenSource();
         var capture = process.ReadAllTextAsync(drain.Token);
         var command = string.Join(' ', args);

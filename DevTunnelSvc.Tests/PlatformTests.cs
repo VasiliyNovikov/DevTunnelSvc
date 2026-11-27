@@ -135,6 +135,27 @@ public sealed class PlatformTests
     }
 
     [TestMethod]
+    public async Task AutomaticWorkerEscapesTheServiceLifetimeAndReportsLaunchFailure()
+    {
+        const string exe = "/home/a $user/dev tunnel";
+        var linux = AutoUpdateLauncher.LinuxWorker(exe, "42", "/custom data", "/custom tmp");
+        Assert.AreEqual("systemd-run", linux.FileName);
+        CollectionAssert.AreEqual(new[] { "--user", "--quiet", "--collect", "--unit=devtunnelsvc-auto-update", "--setenv=XDG_DATA_HOME=/custom data",
+            "--setenv=TMPDIR=/custom tmp", "--", exe, "__auto-update", "42" }, linux.ArgumentList.ToArray());
+        var windows = AutoUpdateLauncher.WindowsWorker(exe, "42");
+        Assert.AreEqual(exe, windows.FileName);
+        Assert.IsTrue(windows.StartDetached);
+        Assert.AreEqual("__auto-update,42", string.Join(',', windows.ArgumentList));
+
+        var rejected = OperatingSystem.IsWindows() ? new ProcessStartInfo("cmd.exe", ["/d", "/c", "exit", "/b", "7"]) : new ProcessStartInfo("/bin/sh", ["-c", "exit 7"]);
+        using var limit = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        var error = await Assert.ThrowsExactlyAsync<InvalidOperationException>(() => AutoUpdateLauncher.LaunchAsync(rejected, limit.Token));
+        Assert.Contains("exit 7", error.Message);
+        await limit.CancelAsync();
+        await Assert.ThrowsAsync<OperationCanceledException>(() => AutoUpdateLauncher.LaunchAsync(windows, limit.Token));
+    }
+
+    [TestMethod]
     public void RegistrationCannotAccidentallyTargetTheDotnetHost()
     {
         Assert.Contains("path", Assert.ThrowsExactly<InvalidOperationException>(() => ServiceLifetime.RequireExecutable(null)).Message);

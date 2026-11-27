@@ -44,7 +44,7 @@ internal sealed class TrayDialog : Form
         return new TrayDialog(icon, content) { Owner = owner };
     }
 
-    internal TrayDialog(Icon titleIcon, TrayDialogContent content)
+    internal TrayDialog(Icon titleIcon, TrayDialogContent content, bool confirm = false)
     {
         Text = content.Title;
         Icon = titleIcon;
@@ -53,7 +53,7 @@ internal sealed class TrayDialog : Form
         FormBorderStyle = FormBorderStyle.FixedDialog;
         AutoScaleDimensions = new SizeF(96, 96);
         AutoScaleMode = AutoScaleMode.Dpi;
-        ClientSize = content.Scrollable ? new Size(600, 290) : new Size(408, 144);
+        ClientSize = confirm || content.Scrollable ? new Size(600, 290) : new Size(408, 144);
         var layout = new TableLayoutPanel { Dock = DockStyle.Fill, Padding = new Padding(16), ColumnCount = 2, RowCount = 2 };
         Controls.Add(layout);
         layout.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
@@ -63,11 +63,24 @@ internal sealed class TrayDialog : Form
         layout.Controls.Add(Artwork(), 0, 0);
         body = Body(content);
         layout.Controls.Add(body, 1, 0);
-        var ok = new Button { Text = "OK", Anchor = AnchorStyles.Right, AutoSize = true, MinimumSize = new Size(80, 25), UseVisualStyleBackColor = true };
-        ok.Click += (_, _) => Close();
-        layout.Controls.Add(ok, 1, 1);
-        AcceptButton = CancelButton = ok;
-        ActiveControl = ok;
+        AddButtons(layout, confirm);
+    }
+
+    private void AddButtons(TableLayoutPanel layout, bool confirm)
+    {
+        var buttons = new FlowLayoutPanel { AutoSize = true, Anchor = AnchorStyles.Right, WrapContents = false };
+        Button Add(string text, DialogResult result)
+        {
+            var button = new Button { Text = text, AutoSize = true, MinimumSize = new Size(80, 25), DialogResult = result, UseVisualStyleBackColor = true };
+            buttons.Controls.Add(button);
+            return button;
+        }
+        if (confirm) Add("Enable", DialogResult.Yes);
+        var dismiss = Add(confirm ? "Cancel" : "OK", DialogResult.Cancel);
+        dismiss.Click += (_, _) => Close();
+        layout.Controls.Add(buttons, 1, 1);
+        AcceptButton = CancelButton = dismiss;
+        ActiveControl = dismiss;
     }
 
     protected override void OnShown(EventArgs e)

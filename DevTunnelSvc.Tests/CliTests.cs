@@ -1,5 +1,6 @@
 ﻿using System.Reflection;
 using DevTunnelSvc.Service;
+using DevTunnelSvc.Updates;
 
 namespace DevTunnelSvc.Tests;
 
@@ -125,6 +126,44 @@ public sealed class CliTests
     }
 
     [TestMethod]
+    [DataRow(" Yes ", true)]
+    [DataRow("Y", true)]
+    [DataRow("yes please", false)]
+    [DataRow("", false)]
+    public async Task AutoUpdateRequiresExplicitConsentBeforeEnabling(string answer, bool accepted)
+    {
+        List<string> requests = [];
+        using var output = new StringWriter();
+        using var input = new StringReader(answer);
+        Assert.AreEqual(0, await Cli.RunAsync(["auto-update", "enable"], output, TextWriter.Null, (r, _) =>
+        {
+            requests.Add(r.Command);
+            return Task.FromResult(r.Command == "auto-update-status" ? AutoUpdateConsent.Disabled : AutoUpdateConsent.Enabled);
+        }, input: input));
+        Assert.Contains("Active tunnel connections will be interrupted", output.ToString());
+        Assert.Contains("Saved port mappings will be restored", output.ToString());
+        Assert.Contains("[y/N]", output.ToString());
+        Assert.Contains(accepted ? "enabled." : "not enabled.", output.ToString());
+        Assert.AreEqual(accepted ? "auto-update-status,auto-update-enable" : "auto-update-status", string.Join(',', requests));
+    }
+
+    [TestMethod]
+    [DataRow("enable", "auto-update-status")]
+    [DataRow("disable", "auto-update-disable")]
+    [DataRow("status", "auto-update-status")]
+    public async Task ExistingOptInStatusAndOptOutDoNotPrompt(string verb, string expectedRequest)
+    {
+        using var output = new StringWriter();
+        var result = verb == "disable" ? AutoUpdateConsent.Disabled : AutoUpdateConsent.Enabled;
+        Assert.AreEqual(0, await Cli.RunAsync(["auto-update", verb], output, TextWriter.Null, (r, _) =>
+        {
+            Assert.AreEqual(new Request(expectedRequest), r);
+            return Task.FromResult(result);
+        }));
+        Assert.AreEqual(result + Environment.NewLine, output.ToString());
+    }
+
+    [TestMethod]
     [DataRow("host", "--tunnel-port", "8080", "--target-port")]
     [DataRow("connect", "--listen-port", "5000", "--tunnel-port")]
     public async Task MissingPortOptionsAreRejectedBeforeContactingService(string command, string supplied, string value, string missing)
@@ -166,6 +205,8 @@ public sealed class CliTests
 // Tests reach the CLI only through these defaults, which never touch the developer's real service or desktop.
 internal static class Cli
 {
+    internal static readonly AutoUpdateActions NoBackgroundUpdates = new(() => throw new AssertFailedException("Unexpected auto-update opt-in."),
+        _ => throw new AssertFailedException("Unexpected release poll."), (_, _) => throw new AssertFailedException("Unexpected updater."), Task.Delay);
     internal static readonly LocalActions NoLocalActions = new(
         (_, _, _) => throw new AssertFailedException("Unexpected login."),
         (_, _) => throw new AssertFailedException("Unexpected update."),
@@ -174,7 +215,7 @@ internal static class Cli
         (_, _) => throw new AssertFailedException("Unexpected service run."));
 
     internal static Task<int> RunAsync(string[] args, TextWriter output, TextWriter error,
-        Func<Request, CancellationToken, Task<string>>? send = null, LocalActions? actions = null) =>
-        Program.RunAsync(args, output, error, send ?? ((_, _) => throw new AssertFailedException("Unexpected service request.")),
+        Func<Request, CancellationToken, Task<string>>? send = null, LocalActions? actions = null, TextReader? input = null) =>
+        Program.RunAsync(args, input ?? TextReader.Null, output, error, send ?? ((_, _) => throw new AssertFailedException("Unexpected service request.")),
             actions ?? NoLocalActions);
 }

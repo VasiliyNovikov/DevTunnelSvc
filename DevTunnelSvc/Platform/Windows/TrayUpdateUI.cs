@@ -1,3 +1,4 @@
+using System.Drawing;
 using System.Globalization;
 using System.Windows.Forms;
 using DevTunnelSvc.Auth;
@@ -10,6 +11,14 @@ namespace DevTunnelSvc.Platform;
 internal sealed partial class TrayUpdate
 {
     private const string Caption = "DevTunnelSvc Update";
+
+    internal static bool ConfirmAutoUpdate(Form owner, Icon icon, string question, CancellationToken ct)
+    {
+        ct.ThrowIfCancellationRequested();
+        using var dialog = new TrayDialog(icon, new("DevTunnelSvc Auto-update", question.ReplaceLineEndings()), confirm: true);
+        using var cancel = ct.Register(() => owner.BeginInvoke((Action)(() => { if (!dialog.IsDisposed) dialog.Close(); })));
+        return dialog.ShowDialog(owner) == DialogResult.Yes;
+    }
 
     internal static Task<int> FromMenuAsync(int servicePid, CancellationToken ct) => WithFeedbackAsync(async () =>
     {

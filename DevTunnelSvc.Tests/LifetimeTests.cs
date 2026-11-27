@@ -40,11 +40,11 @@ public sealed class LifetimeTests
         using var limit = new CancellationTokenSource(TimeSpan.FromSeconds(10));
         using var log = new StringWriter();
         using var owner = new MemoryStream();
-        var run = ServiceLifetime.RunAsync(log, name, directory.FullName, limit.Token, (pipeName, _, _) => { Assert.AreEqual(name, pipeName); return owner; });
+        var run = ServiceLifetime.RunAsync(log, name, directory.FullName, Cli.NoBackgroundUpdates, limit.Token, (pipeName, _, _, _) => { Assert.AreEqual(name, pipeName); return owner; });
         try
         {
             Assert.Contains("signed out", await Control.SendAsync(new("status"), name, limit.Token));
-            await Assert.ThrowsExactlyAsync<IOException>(() => ServiceLifetime.RunAsync(log, name, directory.FullName, limit.Token));
+            await Assert.ThrowsExactlyAsync<IOException>(() => ServiceLifetime.RunAsync(log, name, directory.FullName, Cli.NoBackgroundUpdates, limit.Token));
             Assert.IsTrue(owner.CanWrite);
             Assert.Contains("stopping", await Control.SendAsync(new("shutdown"), name, limit.Token));
             await run;
@@ -65,7 +65,7 @@ public sealed class LifetimeTests
     {
         var directory = Directory.CreateTempSubdirectory("devtunnel-cancel-");
         using var stop = new CancellationTokenSource(TimeSpan.FromSeconds(10));
-        var run = ServiceLifetime.RunAsync(TextWriter.Null, $"devtunnel-{Guid.NewGuid():N}", directory.FullName, stop.Token);
+        var run = ServiceLifetime.RunAsync(TextWriter.Null, $"devtunnel-{Guid.NewGuid():N}", directory.FullName, Cli.NoBackgroundUpdates, stop.Token);
         try { await stop.CancelAsync(); await run.WaitAsync(TimeSpan.FromSeconds(3)); }
         finally { directory.Delete(true); }
     }
@@ -82,7 +82,7 @@ public sealed class LifetimeTests
         async Task RunOnce(Func<Task> commands, bool cancel = false)
         {
             using var stop = CancellationTokenSource.CreateLinkedTokenSource(ct);
-            var service = ServiceLifetime.RunAsync(TextWriter.Null, name, directory.FullName, stop.Token);
+            var service = ServiceLifetime.RunAsync(TextWriter.Null, name, directory.FullName, Cli.NoBackgroundUpdates, stop.Token);
             try
             {
                 await commands();
@@ -122,8 +122,8 @@ public sealed class LifetimeTests
         Action<Exception?>? signal = null;
         try
         {
-            var service = ServiceLifetime.RunAsync(TextWriter.Null, $"devtunnel-{Guid.NewGuid():N}", directory.FullName, limit.Token,
-                (_, _, callback) => { signal = callback; return owner; });
+            var service = ServiceLifetime.RunAsync(TextWriter.Null, $"devtunnel-{Guid.NewGuid():N}", directory.FullName, Cli.NoBackgroundUpdates, limit.Token,
+                (_, _, _, callback) => { signal = callback; return owner; });
             Assert.IsNotNull(signal);
             signal(fail ? new IOException("Explorer unavailable") : null);
             if (fail)

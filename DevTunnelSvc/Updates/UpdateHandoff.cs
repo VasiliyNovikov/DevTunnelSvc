@@ -4,7 +4,7 @@ using DevTunnelSvc.Service;
 
 namespace DevTunnelSvc.Updates;
 
-internal sealed record UpdateHandoff(Func<Request, CancellationToken, Task<string>> Send, Func<Task> Start, Action<string>? Trace = null)
+internal sealed record UpdateHandoff(Func<Request, CancellationToken, Task<string>> Send, Func<Task> Start, Action<string>? Trace = null, int? AutoServicePid = null)
 {
     internal static string Question(string current, string tag) =>
         $"Install {tag} (currently {current})?\n\nThis will stop all active port mappings, install the update, and restart DevTunnelSvc. Saved mappings will reconnect.";
@@ -18,6 +18,13 @@ internal sealed record UpdateHandoff(Func<Request, CancellationToken, Task<strin
 
     private async Task<bool> StopIfRunningAsync(CancellationToken ct)
     {
+        if (AutoServicePid is { } scheduled)
+        {
+            ct.ThrowIfCancellationRequested();
+            Trace?.Invoke($"Requesting automatic update of service PID {scheduled}.");
+            await Send(new(AutoUpdates.Shutdown, ServicePid: scheduled), CancellationToken.None);
+            return true;
+        }
         string target;
         try { target = await Send(new("service-pid"), ct); }
         catch (IOException ex) when (ex.InnerException is TimeoutException) { return false; }

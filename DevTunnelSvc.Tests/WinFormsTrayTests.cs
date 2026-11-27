@@ -18,15 +18,15 @@ public sealed class WinFormsTrayTests
         {
             var stopped = new TaskCompletionSource<Exception?>(TaskCreationOptions.RunContinuationsAsynchronously);
             var disposedOnOwner = false;
-            using (var tray = new TrayIcon("unused", _ => { }, e => stopped.SetResult(e), icon =>
+            using (var tray = new TrayIcon("unused", _ => { }, () => false, e => stopped.SetResult(e), icon =>
             {
                 var owner = Environment.CurrentManagedThreadId;
                 Assert.AreEqual(ApartmentState.STA, Thread.CurrentThread.GetApartmentState());
                 Assert.IsNotNull(icon.Icon);
                 var popup = icon.ContextMenuStrip!;
-                Assert.AreEqual("&Status,&Update,&About,,E&xit", string.Join(',', popup.Items.Cast<ToolStripItem>().Select(item => item.Text)));
+                Assert.AreEqual("&Status,&Update,Auto-up&date,&About,,E&xit", string.Join(',', popup.Items.Cast<ToolStripItem>().Select(item => item.Text)));
                 icon.Disposed += (_, _) => disposedOnOwner = Environment.CurrentManagedThreadId == owner;
-                if (clickExit) SynchronizationContext.Current!.Post(_ => popup.Items[4].PerformClick(), null);
+                if (clickExit) SynchronizationContext.Current!.Post(_ => popup.Items[5].PerformClick(), null);
             }))
             {
                 if (clickExit) Assert.IsNull(await stopped.Task.WaitAsync(TimeSpan.FromSeconds(5)));
@@ -41,9 +41,9 @@ public sealed class WinFormsTrayTests
     {
         var failure = new IOException("Explorer unavailable");
         Assert.AreSame(failure, Assert.ThrowsExactly<IOException>(() =>
-            new TrayIcon("unused", _ => { }, _ => Assert.Fail(), _ => throw failure)));
+            new TrayIcon("unused", _ => { }, () => false, _ => Assert.Fail(), _ => throw failure)));
         var stopped = new TaskCompletionSource<Exception?>(TaskCreationOptions.RunContinuationsAsynchronously);
-        using var tray = new TrayIcon("unused", _ => { }, e => stopped.SetResult(e),
+        using var tray = new TrayIcon("unused", _ => { }, () => false, e => stopped.SetResult(e),
             _ => SynchronizationContext.Current!.Post(_ => throw failure, null));
         Assert.AreSame(failure, await stopped.Task.WaitAsync(TimeSpan.FromSeconds(5)));
     }
@@ -58,7 +58,7 @@ public sealed class WinFormsTrayTests
         using var limit = new CancellationTokenSource(TimeSpan.FromSeconds(5));
         var stopped = new TaskCompletionSource<Exception?>(TaskCreationOptions.RunContinuationsAsynchronously);
         var ui = new TaskCompletionSource<(SynchronizationContext Thread, ContextMenuStrip Menu)>(TaskCreationOptions.RunContinuationsAsynchronously);
-        using (var tray = new TrayIcon(pipe, _ => { }, e => stopped.SetResult(e), icon =>
+        using (var tray = new TrayIcon(pipe, _ => { }, () => false, e => stopped.SetResult(e), icon =>
         {
             var popup = icon.ContextMenuStrip!;
             var thread = SynchronizationContext.Current!;
@@ -74,11 +74,11 @@ public sealed class WinFormsTrayTests
             {
                 popup.Opening += (_, e) =>
                 {
-                    canUseMenu.SetResult(!e.Cancel && !popup.Items[0].Enabled && popup.Items[2].Enabled && popup.Items[4].Enabled);
+                    canUseMenu.SetResult(!e.Cancel && !popup.Items[0].Enabled && popup.Items[3].Enabled && popup.Items[5].Enabled);
                     e.Cancel = true; // Exercise Opening without displaying a menu on the developer's desktop.
                 };
                 popup.Show(Point.Empty);
-                if (clickExit) popup.Items[4].PerformClick();
+                if (clickExit) popup.Items[5].PerformClick();
             }, null);
             Assert.IsTrue(await canUseMenu.Task.WaitAsync(limit.Token));
             if (clickExit) Assert.IsNull(await stopped.Task.WaitAsync(limit.Token));
@@ -117,12 +117,17 @@ public sealed class WinFormsTrayTests
             Assert.AreSame(status, TrayDialog.GetOrCreate(owner, icon, initial with { Text = "Next report" }));
             Assert.AreEqual("Next report", ((TableLayoutPanel)status.Controls[0]).Controls.OfType<RichTextBox>().Single().Text);
             using var actions = new TrayMenu("unused", () => { }, () => throw new AssertFailedException(), content => TrayDialog.GetOrCreate(owner, icon, content), _ => { });
-            using var menu = TrayIcon.CreatePopup(actions, CancellationToken.None);
+            var autoUpdate = false;
+            using var menu = TrayIcon.CreatePopup(actions, () => autoUpdate, _ => throw new AssertFailedException(), CancellationToken.None);
             var opened = false;
             menu.Opening += (_, e) => { opened = !e.Cancel && menu.Items[0].Enabled; e.Cancel = true; };
             menu.Show(Point.Empty);
             Assert.IsTrue(opened);
-            menu.Items[2].PerformClick();
+            Assert.IsFalse(((ToolStripMenuItem)menu.Items[2]).Checked);
+            autoUpdate = true; // A CLI enable while the popup is closed.
+            menu.Show(Point.Empty);
+            Assert.IsTrue(((ToolStripMenuItem)menu.Items[2]).Checked);
+            menu.Items[3].PerformClick();
             Assert.HasCount(2, owner.OwnedForms);
             Assert.IsTrue(owner.OwnedForms.Any(form => form.Text == "About DevTunnelSvc"));
         }
@@ -131,6 +136,18 @@ public sealed class WinFormsTrayTests
 
     [DllImport("dwmapi.dll", ExactSpelling = true)]
     private static extern int DwmGetWindowAttribute(nint hwnd, int attribute, out int value, int size);
+
+    [STATestMethod]
+    public void ConsentDialogDefaultsToCancelAndRequiresChoosingEnable()
+    {
+        using var icon = TrayDialog.LoadArtwork(16);
+        using var form = new TrayDialog(icon, new("DevTunnelSvc Auto-update", Updates.AutoUpdateConsent.Question), confirm: true);
+        var buttons = ((TableLayoutPanel)form.Controls[0]).Controls.OfType<FlowLayoutPanel>().Single().Controls.OfType<Button>();
+        Assert.AreEqual(DialogResult.Yes, buttons.Single(button => button.Text == "Enable").DialogResult);
+        Assert.AreSame((Button)form.CancelButton!, form.ActiveControl);
+        Assert.AreSame(form.AcceptButton, form.CancelButton);
+        Assert.AreEqual("Cancel", ((Button)form.CancelButton!).Text);
+    }
 
     [STATestMethod]
     [DataRow(false)]

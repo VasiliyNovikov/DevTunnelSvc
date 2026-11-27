@@ -67,9 +67,10 @@ public sealed class UpdateWorkerTests
     }
 
     [TestMethod]
-    [DataRow(false)]
-    [DataRow(true)]
-    public async Task CliParentStagesTheRequestedModeAndPinsTheCheckedRelease(bool force)
+    [DataRow(false, null, "update")]
+    [DataRow(true, null, "update --force")]
+    [DataRow(true, 42, "__auto-update 42")]
+    public async Task CliParentStagesTheRequestedModeAndPinsTheCheckedRelease(bool force, int? pid, string command)
     {
         if (!OperatingSystem.IsLinux()) return; // Windows CI exercises this boundary using two published EXEs.
         var root = Directory.CreateTempSubdirectory("devtunnel-staging-cli-");
@@ -81,8 +82,8 @@ public sealed class UpdateWorkerTests
             using var http = new HttpClient(new HttpStub((_, _) => Task.FromResult(HttpStub.Json("""{"tag_name":"v2.0.0","assets":[]}"""))));
             var update = new CliUpdate(http, "1.0.0", () => new(exe, root.FullName, "unused", (_, _) => throw new AssertFailedException(),
                 () => throw new AssertFailedException()));
-            var result = (await update.RunAsync(new(false, force), CancellationToken.None)).Split('\n');
-            Assert.AreEqual(force ? "update --force --update-worker-tag v2.0.0" : "update --update-worker-tag v2.0.0", result[1]);
+            var result = (await update.RunAsync(new(false, force, AutoServicePid: pid), CancellationToken.None)).Split('\n');
+            Assert.AreEqual(command + " --update-worker-tag v2.0.0", result[1]);
             var copy = new FileInfo(result[0]);
             Assert.AreEqual(root.FullName, copy.Directory?.Parent?.FullName);
             Assert.AreEqual("fake-cli", copy.Name);

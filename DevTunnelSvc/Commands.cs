@@ -8,7 +8,7 @@ using DevTunnelSvc.Updates;
 namespace DevTunnelSvc;
 
 internal readonly record struct LoginOptions(bool OpenBrowser, bool CopyToClipboard);
-internal readonly record struct UpdateOptions(bool CheckOnly, bool Force, string? WorkerTag = null);
+internal readonly record struct UpdateOptions(bool CheckOnly, bool Force, string? WorkerTag = null, int? AutoServicePid = null);
 
 internal sealed record LocalActions(
     Func<TextWriter, LoginOptions, CancellationToken, Task<GitHubCredential>> Login,
@@ -21,7 +21,7 @@ internal sealed record LocalActions(
         ServiceLifetime.StartAsync, ServiceLifetime.InstallAsync, ServiceLifetime.RunAsync);
 }
 
-internal sealed class Commands(TextWriter output, TextWriter error, Func<Request, CancellationToken, Task<string>> send, LocalActions localActions)
+internal sealed class Commands(TextReader input, TextWriter output, TextWriter error, Func<Request, CancellationToken, Task<string>> send, LocalActions localActions)
 {
     public async Task<int> InvokeAsync(string[] args)
     {
@@ -37,6 +37,8 @@ internal sealed class Commands(TextWriter output, TextWriter error, Func<Request
         root.Subcommands.Add(Forward(false));
         root.Subcommands.Add(Service());
         root.Subcommands.Add(Update());
+        root.Subcommands.Add(AutoUpdate());
+        root.Subcommands.Add(AutoUpdateWorker());
 #if WINDOWS
         root.Subcommands.Add(TrayUpdateCommand());
 #endif
@@ -74,6 +76,27 @@ internal sealed class Commands(TextWriter output, TextWriter error, Func<Request
         return command;
     }
 #endif
+
+    private Command AutoUpdate()
+    {
+        var command = new Command("auto-update", "Manage automatic updates from stable releases.");
+        command.Subcommands.Add(Action("status", (_, ct) => send(new(AutoUpdateConsent.Status), ct)));
+        command.Subcommands.Add(Action("enable", (_, ct) => AutoUpdateConsent.ChangeAsync(true, send,
+            (question, token) => AutoUpdateConsent.ConfirmAsync(input, output, question, token), ct)));
+        command.Subcommands.Add(Action("disable", (_, ct) => send(new(AutoUpdateConsent.Disable), ct)));
+        return command;
+    }
+
+    private Command AutoUpdateWorker()
+    {
+        var pid = new Argument<int>("service-pid");
+        var tag = new Option<string?>(UpdateWorker.TagOption) { Hidden = true };
+        var command = Action(AutoUpdates.Worker, (r, ct) => localActions.Update(new(false, true, r.GetValue(tag), r.GetRequiredValue(pid)), ct));
+        command.Hidden = true;
+        command.Arguments.Add(pid);
+        command.Options.Add(tag);
+        return command;
+    }
 
     private Command Update()
     {

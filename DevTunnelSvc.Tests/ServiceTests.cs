@@ -36,7 +36,7 @@ public sealed class ServiceTests : IDisposable
         var name = $"DevTunnelSvc-test-{Guid.NewGuid():N}";
         using var limit = new CancellationTokenSource(TimeSpan.FromSeconds(15));
         using var log = new StringWriter();
-        var server = ControlServer.RunAsync(name, state, log, events.Enqueue, limit.Token);
+        var server = ControlServer.RunAsync(name, state.ExecuteAsync, log, events.Enqueue, limit.Token);
         Task<string> Send(Request r, CancellationToken ct) => Control.SendAsync(r, name, ct);
         try
         {
@@ -423,7 +423,7 @@ public sealed class ServiceTests : IDisposable
         await using var state = CreateService(backend);
         var name = $"DevTunnelSvc-tray-update-{Guid.NewGuid():N}";
         using var limit = new CancellationTokenSource(TimeSpan.FromSeconds(10));
-        var server = ControlServer.RunAsync(name, state, TextWriter.Null, events.Enqueue, limit.Token);
+        var server = ControlServer.RunAsync(name, state.ExecuteAsync, TextWriter.Null, events.Enqueue, limit.Token);
         Task<string> Send(Request r) => Control.SendAsync(r, name, limit.Token);
         try
         {
@@ -451,7 +451,7 @@ public sealed class ServiceTests : IDisposable
         var name = $"DevTunnelSvc-test-{Guid.NewGuid():N}";
         using var ct = new CancellationTokenSource(TimeSpan.FromSeconds(10));
         using var log = new StringWriter();
-        var server = ControlServer.RunAsync(name, service, log, events.Enqueue, ct.Token);
+        var server = ControlServer.RunAsync(name, service.ExecuteAsync, log, events.Enqueue, ct.Token);
         try
         {
             using (var pipe = new NamedPipeClientStream(".", name, PipeDirection.InOut, Control.Options))

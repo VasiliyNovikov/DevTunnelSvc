@@ -95,7 +95,7 @@ Successful `host` and `connect` commands save their tunnel ID and exact ports in
 
 Use the mapping name from `status` to close **and forget** one mapping: for example, `devtunnelsvc disconnect connect:blue-tunnel.use2:5000` for a client, or `devtunnelsvc stop host:blue-tunnel.use2` for a host. `stop` also accepts client mappings. Neither command deletes the cloud tunnel; only `delete TUNNEL` does that. One hosted mapping is supported per tunnel at a time. `service stop` and tray **Exit** preserve mappings for the next start. When upgrading from v0.1.6 or earlier, reissue `host` and `connect` once: those versions never saved their mappings.
 
-<img src="DevTunnelSvc/Assets/devtunnelsvc.png" width="32" height="32" alt="Teal tunnel and outbound arrow"> On Windows, right-click the notification-area icon for **Status**, **Update**, **About**, or **Exit**. **Status** opens or refreshes a window with the same sign-in state and active mappings as `devtunnelsvc status`. The tray menu stays available while that window is open. **About** shows the running version. The Windows Forms menu and dialogs follow the Windows 11 app theme; high contrast and older Windows versions use system colors. **Exit** stops the service and its mappings without signing you out or removing its startup registration.
+<img src="DevTunnelSvc/Assets/devtunnelsvc.png" width="32" height="32" alt="Teal tunnel and outbound arrow"> On Windows, right-click the notification-area icon for **Status**, **Update**, **Auto-update**, **About**, or **Exit**. **Status** opens or refreshes a window with the same sign-in state and active mappings as `devtunnelsvc status`. The tray menu stays available while that window is open. **About** shows the running version. The Windows Forms menu and dialogs follow the Windows 11 app theme; high contrast and older Windows versions use system colors. **Exit** stops the service and its mappings without signing you out or removing its startup registration.
 
 ```shell
 devtunnelsvc update --check
@@ -103,6 +103,10 @@ devtunnelsvc update --force
 ```
 
 On both platforms, `update --check` only reports availability. `update --force` checks for a newer stable release first. Without asking, it stops a running service, verifies the release asset's SHA-256 digest, installs it, and starts the service, even if the service was stopped beforehand or the install failed. It checks that the installed CLI can reach the service after the starter exits. The Windows tray's **Update** action does the same for its running service but asks first. Saved sign-in and mappings are preserved. If you're already up to date, nothing is stopped, reinstalled, or started.
+
+**Automatic updates are off by default.** Select **Auto-update** in the Windows tray, or run `devtunnelsvc auto-update enable` on either platform. Both explain the interruption and ask for confirmation. Once enabled, the running service checks immediately and then every five minutes. It installs newer stable releases without asking again. **Active connections are interrupted** while the service restarts; saved hosts and forwards are restored, but applications may need to reconnect.
+
+The setting is per user and survives service restarts and updates. While the service is running, use `devtunnelsvc auto-update status` to see it or `devtunnelsvc auto-update disable` to turn it off. Unchecking the tray item does the same. Disabling does not stop any tunnels, and a stopped service does not check for releases.
 
 Plain `update` never stops a running service. To control downtime yourself, run `devtunnelsvc service stop`, `devtunnelsvc update`, then `devtunnelsvc service start`. `service run` runs in the foreground for diagnostics. Linux requires a running systemd user manager for `install` and `start`. To keep the service running after the last login session ends, configure user lingering according to your system policy.
 

@@ -37,13 +37,16 @@ var actions = new LocalActions((_, _, _) => throw new NotSupportedException(), u
     ct => ServiceLifetime.StartAsync(true, t => Send(new("status"), t),
         t => ServiceLifetime.LaunchAsync(image, i => Process.Start(i)!.Dispose(), (_, _) => throw new NotSupportedException(), t), ct),
     _ => throw new NotSupportedException(), (log, ct) => RunService(log, ct));
-return await DevTunnelSvc.Program.RunAsync(args, Console.Out, Console.Error, Send, actions);
+return await DevTunnelSvc.Program.RunAsync(args, Console.In, Console.Out, Console.Error, Send, actions);
 
 async Task RunService(TextWriter log, CancellationToken ct)
 {
     using var lifetime = CancellationTokenSource.CreateLinkedTokenSource(limit.Token, ct);
     // Exercise the packaged WinForms thread and embedded artwork, but don't add an icon to the user's taskbar.
-    await ServiceLifetime.RunAsync(log, pipe, state, lifetime.Token, static (name, writeEvent, stopped) => new TrayIcon(name, writeEvent, stopped, _ => { }));
+    var background = new AutoUpdateActions(DevTunnelSvc.Program.RequireSingleFileUpdate,
+        t => new ReleaseUpdate(http).FindNewerAsync(DevTunnelSvc.Program.Version, t), (pid, t) => AutoUpdateLauncher.LaunchAsync(image, pid, t), Task.Delay);
+    await ServiceLifetime.RunAsync(log, pipe, state, background, lifetime.Token,
+        static (name, writeEvent, enabled, stopped) => new TrayIcon(name, writeEvent, enabled, stopped, _ => { }));
 }
 
 internal sealed class OfflineRelease(string state) : HttpMessageHandler

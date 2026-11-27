@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Globalization;
 using DevTunnelSvc.Platform;
 using DevTunnelSvc.Service;
 
@@ -11,23 +12,26 @@ internal sealed class CliUpdate(HttpClient http, string version, Func<UpdateInst
 {
     internal Task<string> RunAsync(UpdateOptions options, CancellationToken ct)
     {
-        if (!options.CheckOnly && options.WorkerTag is { } tag) return ApplyFromCopyAsync(tag, options.Force, ct);
+        if (options.AutoServicePid is { } pid) ArgumentOutOfRangeException.ThrowIfNegativeOrZero(pid);
+        if (!options.CheckOnly && options.WorkerTag is { } tag) return ApplyFromCopyAsync(tag, options, ct);
         return new ReleaseUpdate(http).CheckAsync(version, options.CheckOnly, (release, token) =>
         {
             var target = installation();
             var log = new AppLog(target.Directory, "update", Console.Error.WriteLine);
             log.Write($"Updating {version} to {release.TagName}.");
-            return UpdateWorker.RunAsync(target.Image, options.Force ? ["update", "--force"] : ["update"], release.TagName, log, token);
+            string[] arguments = options.AutoServicePid is { } servicePid ? [AutoUpdates.Worker, servicePid.ToString(CultureInfo.InvariantCulture)]
+                : options.Force ? ["update", "--force"] : ["update"];
+            return UpdateWorker.RunAsync(target.Image, arguments, release.TagName, log, token);
         }, ct);
     }
 
-    private Task<string> ApplyFromCopyAsync(string expectedTag, bool force, CancellationToken ct)
+    private Task<string> ApplyFromCopyAsync(string expectedTag, UpdateOptions options, CancellationToken ct)
     {
         var target = installation();
         var installed = UpdateWorker.InstalledPath(target.Image);
         var log = new AppLog(target.Directory, "update", Console.Error.WriteLine);
-        var handoff = force ? new UpdateHandoff((r, t) => Control.SendAsync(r, target.Pipe, t),
-            () => UpdateHandoff.StartInstalledAsync(installed, target.RunInstalled, log.Write), log.Write) : null;
+        var handoff = options.Force ? new UpdateHandoff((r, t) => Control.SendAsync(r, target.Pipe, t),
+            () => UpdateHandoff.StartInstalledAsync(installed, target.RunInstalled, log.Write), log.Write, options.AutoServicePid) : null;
         log.Write("Verifying the selected release before installation.");
         return log.TraceAsync("Worker", () => UpdateWorker.UntilParentClosesAsync(target.ParentClosed(), t => new ReleaseUpdate(http, handoff)
             .RunAsync(version, installed, false, () => UpdateWorker.AcquireLease(target.Image, installed, target.Directory), t, expectedTag), ct));

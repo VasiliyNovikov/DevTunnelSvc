@@ -3,6 +3,7 @@ using System.Diagnostics;
 using System.Globalization;
 using System.Text.Json;
 using DevTunnelSvc.Service;
+using DevTunnelSvc.Updates;
 
 namespace DevTunnelSvc.Platform;
 
@@ -15,6 +16,7 @@ internal sealed class TrayMenu(string pipeName, Action exit, Func<Process> launc
     private Process? updater;
     internal bool Updating => updater is { HasExited: false };
     internal Task PendingStatus { get; private set; } = Task.CompletedTask;
+    internal Task PendingConfiguration { get; private set; } = Task.CompletedTask;
 
     internal Task SelectAsync(Command command, CancellationToken ct)
     {
@@ -24,33 +26,45 @@ internal sealed class TrayMenu(string pipeName, Action exit, Func<Process> launc
         return PendingStatus;
     }
 
-    private async Task ExecuteAsync(Command command, CancellationToken ct)
+    internal Task ConfigureAutoUpdateAsync(bool enable, Func<string, bool> confirm, CancellationToken ct)
     {
-        try
+        if (ct.IsCancellationRequested || !PendingConfiguration.IsCompleted) return PendingConfiguration;
+        return PendingConfiguration = WithFeedbackAsync(async () =>
         {
-            writeEvent($"Tray menu: {command}.");
-            switch (command)
-            {
-                case Command.Status:
-                    var status = await ReadStatusAsync(ct);
-                    ct.ThrowIfCancellationRequested();
-                    show(new("DevTunnelSvc Status", status, Scrollable: true));
-                    break;
-                case Command.Update when !Updating:
-                    updater?.Dispose();
-                    updater = null;
-                    updater = launchUpdate();
-                    break;
-                case Command.About:
-                    show(new("About DevTunnelSvc", $"DevTunnelSvc {Program.Version}\r\n\r\nHosts and forwards Microsoft Dev Tunnels for your Windows user."));
-                    break;
-                case Command.Exit:
-                    exit();
-                    break;
-            }
+            writeEvent("Tray menu: Auto-update.");
+            await AutoUpdateConsent.ChangeAsync(enable, (r, t) => Control.SendAsync(r, pipeName, t), (text, _) => Task.FromResult(confirm(text)), ct);
+        }, ct);
+    }
+
+    private Task ExecuteAsync(Command command, CancellationToken ct) => WithFeedbackAsync(async () =>
+    {
+        writeEvent($"Tray menu: {command}.");
+        switch (command)
+        {
+            case Command.Status:
+                var status = await ReadStatusAsync(ct);
+                ct.ThrowIfCancellationRequested();
+                show(new("DevTunnelSvc Status", status, Scrollable: true));
+                break;
+            case Command.Update when !Updating:
+                updater?.Dispose();
+                updater = null;
+                updater = launchUpdate();
+                break;
+            case Command.About:
+                show(new("About DevTunnelSvc", $"DevTunnelSvc {Program.Version}\r\n\r\nHosts and forwards Microsoft Dev Tunnels for your Windows user."));
+                break;
+            case Command.Exit:
+                exit();
+                break;
         }
+    }, ct);
+
+    private async Task WithFeedbackAsync(Func<Task> action, CancellationToken ct)
+    {
+        try { await action(); }
         catch (OperationCanceledException) when (ct.IsCancellationRequested) { /* The tray is closing. */ }
-        catch (Exception ex) when (ex is Win32Exception or IOException or InvalidOperationException)
+        catch (Exception ex) when (ex is Win32Exception or IOException or InvalidOperationException or InvalidDataException or JsonException or UnauthorizedAccessException or OperationCanceledException)
         {
             writeEvent($"Tray menu failed: {AppLog.ErrorCode(ex)}");
             if (!ct.IsCancellationRequested) show(new("DevTunnelSvc", AppLog.Detail(ex), Scrollable: true));

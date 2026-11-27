@@ -41,6 +41,36 @@ public sealed class TrayMenuTests
     }
 
     [TestMethod]
+    public async Task TrayRequiresTheSameConsentAsTheCliAndOptOutNeedsNoDialog()
+    {
+        var state = Directory.CreateTempSubdirectory("devtunnel-tray-consent-");
+        var pipe = $"devtunnel-auto-tray-{Guid.NewGuid():N}";
+        using var limit = new CancellationTokenSource(TimeSpan.FromSeconds(8));
+        var actions = Cli.NoBackgroundUpdates with { RequireSupported = () => { }, FindNewer = _ => Task.FromResult<ReleaseInfo?>(null) };
+        var server = ServiceLifetime.RunAsync(TextWriter.Null, pipe, state.FullName, actions, limit.Token);
+        try
+        {
+            using var menu = new TrayMenu(pipe, () => Assert.Fail(), () => throw new AssertFailedException(), _ => Assert.Fail(), _ => { });
+            Task<string> Status() => Control.SendAsync(new(AutoUpdateConsent.Status), pipe, limit.Token);
+            foreach (var accept in new[] { false, true })
+            {
+                var prompted = false;
+                await menu.ConfigureAutoUpdateAsync(true, question =>
+                {
+                    prompted = true;
+                    Assert.AreEqual(AutoUpdateConsent.Question, question);
+                    return accept;
+                }, limit.Token);
+                Assert.IsTrue(prompted);
+                Assert.AreEqual(accept ? AutoUpdateConsent.Enabled : AutoUpdateConsent.Disabled, await Status());
+            }
+            await menu.ConfigureAutoUpdateAsync(false, _ => throw new AssertFailedException("Unexpected confirmation."), limit.Token);
+            Assert.AreEqual(AutoUpdateConsent.Disabled, await Status());
+        }
+        finally { await limit.CancelAsync(); await server; state.Delete(true); }
+    }
+
+    [TestMethod]
     public async Task StatusShowsAFreshReportOnEachSelectionAndLeavesTheServiceRunningOnFailure()
     {
         var pipe = $"devtunnel-tray-{Guid.NewGuid():N}";

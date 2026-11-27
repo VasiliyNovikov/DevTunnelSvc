@@ -497,7 +497,7 @@ public sealed class HttpTests
         using var http = new HttpClient(new HttpStub((r, _) => Task.FromResult(r.RequestUri!.Host == "api.github.com"
             ? HttpStub.Json(JsonSerializer.Serialize(new { tag_name = "v2.0.0", assets = new[] { new { name, size = asset.Length, digest } } }))
             : new HttpResponseMessage(HttpStatusCode.OK) { Content = new ByteArrayContent(asset) })));
-        var server = force ? ServiceLifetime.RunAsync(TextWriter.Null, pipe, state, limit.Token) : Task.CompletedTask;
+        var server = force ? ServiceLifetime.RunAsync(TextWriter.Null, pipe, state, Cli.NoBackgroundUpdates, limit.Token) : Task.CompletedTask;
         try
         {
             File.WriteAllText(installed, "original");
