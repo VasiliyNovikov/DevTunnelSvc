@@ -6,10 +6,11 @@ internal sealed class TrayLifetime : IDisposable
     private readonly IDisposable? tray;
 
     internal delegate IDisposable Factory(string pipeName, Action<string> writeEvent, Action<Exception?> stopped);
-    internal static Factory? ForCurrentPlatform => OperatingSystem.IsWindows() ? CreateWindowsTray : null;
-
-    [System.Runtime.Versioning.SupportedOSPlatform("windows")]
-    private static TrayIcon CreateWindowsTray(string pipeName, Action<string> writeEvent, Action<Exception?> stopService) => new(pipeName, writeEvent, stopService);
+#if WINDOWS
+    internal static Factory ForCurrentPlatform => static (pipe, log, stopped) => new TrayIcon(pipe, log, stopped);
+#else
+    internal static Factory? ForCurrentPlatform => null;
+#endif
 
     internal TrayLifetime(string pipeName, Action<string> writeEvent, Factory? create) =>
         tray = create?.Invoke(pipeName, writeEvent, e => stopped.TrySetResult(e));

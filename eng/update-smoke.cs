@@ -1,5 +1,7 @@
 #:project ..\DevTunnelSvc\DevTunnelSvc.csproj AdditionalProperties="GenerateRuntimeConfigurationFiles=false"
 #:property AssemblyName=DevTunnelSvc.UpdateSmoke
+#:property TargetFramework=net11.0-windows
+#:property ApplicationIcon=..\DevTunnelSvc\Assets\devtunnelsvc.ico
 #:property PublishAot=false
 #:property PublishSingleFile=true
 #:property PublishReadyToRun=true
@@ -40,7 +42,8 @@ return await DevTunnelSvc.Program.RunAsync(args, Console.Out, Console.Error, Sen
 async Task RunService(TextWriter log, CancellationToken ct)
 {
     using var lifetime = CancellationTokenSource.CreateLinkedTokenSource(limit.Token, ct);
-    await ServiceLifetime.RunAsync(log, pipe, state, lifetime.Token);
+    // Exercise the packaged WinForms thread and embedded artwork, but don't add an icon to the user's taskbar.
+    await ServiceLifetime.RunAsync(log, pipe, state, lifetime.Token, static (name, writeEvent, stopped) => new TrayIcon(name, writeEvent, stopped, _ => { }));
 }
 
 internal sealed class OfflineRelease(string state) : HttpMessageHandler

@@ -1,4 +1,3 @@
-using System.Collections.Concurrent;
 using System.IO.Pipes;
 using DevTunnelSvc.Platform;
 using DevTunnelSvc.Service;
@@ -161,33 +160,6 @@ public sealed class LifetimeTests
     }
 
     [TestMethod]
-    public void TrayShowsAndCleansUpOnOwnerThread()
-    {
-        using var window = new Window();
-        var closed = false;
-        using (var tray = new TrayIcon(() => window, ex => { Assert.IsNull(ex); closed = true; }))
-        {
-            Assert.AreEqual(1, window.Shows);
-            Assert.IsTrue(window.Running.Wait(TimeSpan.FromSeconds(2)));
-        }
-        Assert.AreEqual(1, window.Shows);
-        Assert.IsTrue(window.DisposedOnOwner);
-        Assert.IsTrue(window.CloseRequested);
-        Assert.IsTrue(closed);
-    }
-
-    [TestMethod]
-    public void TrayCreationFailureAndRuntimeFailureReachTheService()
-    {
-        Assert.ThrowsExactly<InvalidOperationException>(() => new TrayIcon(() => throw new InvalidOperationException("no session"), _ => { }));
-        using var window = new Window();
-        using var failed = new ManualResetEventSlim();
-        using var tray = new TrayIcon(() => window, ex => { if (ex is IOException) failed.Set(); });
-        window.Events.Add(true);
-        Assert.IsTrue(failed.Wait(TimeSpan.FromSeconds(2)));
-    }
-
-    [TestMethod]
     public async Task ClientRejectsIncompatibleRepliesAndUnavailableServices()
     {
         using var ct = new CancellationTokenSource(TimeSpan.FromSeconds(5));
@@ -206,29 +178,4 @@ public sealed class LifetimeTests
             new Request("login", SignIn: new(new string('x', 40000))), ControlJson.Default.Request, ct.Token));
     }
 
-    private sealed class Window : TrayIcon.IWindow
-    {
-        internal BlockingCollection<bool> Events { get; } = new();
-        internal ManualResetEventSlim Running { get; } = new();
-        internal int Shows { get; private set; }
-        internal bool DisposedOnOwner { get; private set; }
-        internal bool CloseRequested { get; private set; }
-        private int owner;
-
-        public void Show()
-        {
-            owner = Environment.CurrentManagedThreadId;
-            Shows++;
-        }
-        public void Run()
-        {
-            Running.Set();
-            if (Events.TryTake(out var fail, 3000) && fail) throw new IOException("no taskbar");
-        }
-        public void Close() { CloseRequested = true; Events.Add(false); }
-        public void Dispose()
-        {
-            if (owner == Environment.CurrentManagedThreadId) DisposedOnOwner = true;
-        }
-    }
 }

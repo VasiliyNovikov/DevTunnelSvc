@@ -7,4 +7,9 @@
     <AnalysisMode>Recommended</AnalysisMode>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
   </PropertyGroup>
+  <!-- Build the CLI and its tests for the requested platform, or for the host when no RID is specified. -->
+  <PropertyGroup Condition="('$(MSBuildProjectName)' == 'DevTunnelSvc' or '$(MSBuildProjectName)' == 'DevTunnelSvc.Tests') and
+                            ($(RuntimeIdentifier.StartsWith('win-')) or ('$(RuntimeIdentifier)' == '' and '$(OS)' == 'Windows_NT'))">
+    <TargetFramework>net11.0-windows</TargetFramework>
+  </PropertyGroup>
 </Project>

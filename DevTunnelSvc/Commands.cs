@@ -1,5 +1,4 @@
 using System.CommandLine;
-using System.Runtime.Versioning;
 using DevTunnelSvc.Auth;
 using DevTunnelSvc.Platform;
 using DevTunnelSvc.Service;
@@ -38,7 +37,9 @@ internal sealed class Commands(TextWriter output, TextWriter error, Func<Request
         root.Subcommands.Add(Forward(false));
         root.Subcommands.Add(Service());
         root.Subcommands.Add(Update());
-        if (OperatingSystem.IsWindows()) root.Subcommands.Add(TrayUpdateCommand());
+#if WINDOWS
+        root.Subcommands.Add(TrayUpdateCommand());
+#endif
         var parsed = root.Parse(args);
         if (parsed.Errors.Count != 0)
         {
@@ -54,7 +55,7 @@ internal sealed class Commands(TextWriter output, TextWriter error, Func<Request
         });
     }
 
-    [SupportedOSPlatform("windows")]
+#if WINDOWS
     private Command TrayUpdateCommand()
     {
         var pid = new Argument<int>("service-pid");
@@ -72,6 +73,7 @@ internal sealed class Commands(TextWriter output, TextWriter error, Func<Request
         });
         return command;
     }
+#endif
 
     private Command Update()
     {

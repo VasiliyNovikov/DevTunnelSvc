@@ -36,7 +36,7 @@ The Dockerfile builds on UBI 8, runs the exact binary offline in a clean UBI 8 i
 
 Omit the version for a `0.0.0-dev` package. The release script runs `--version` and `--help` on the actual deliverable (after extraction on Windows). Keep the [asset names](README.md#manual-download) stable for the installers and CLI self-update. The executable is lowercase: Windows ZIPs contain only `devtunnelsvc.exe`; Linux ships the standalone `devtunnelsvc` binary under a RID-suffixed asset name. Both are written to `artifacts/packages/<rid>/`.
 
-The Windows tray loads its small icon from the executable's `ApplicationIcon` resource; do not require a loose image at runtime. The menu and About dialog follow the Windows app theme; high contrast and unsupported menu APIs must retain system colors.
+Keep the WinForms tray and dialogs in the Windows build only. Windows still ships a console CLI with its desktop runtime bundled; Linux must not depend on Windows Desktop. Load tray and dialog icons at display size from the executable's `ApplicationIcon` resource, not a loose image. Follow the Windows app theme where WinForms supports it and retain system colors in high contrast.
 
 Tray updates run in a separate process. Both the tray and `update --force` must check for a newer stable release first, stop only the service instance they identified, wait for its lease, use the same verified installer as plain `update`, and start the service from the installed path even after an install failure. The tray asks before stopping its service. `update --force` never prompts, so it can run unattended, and it also starts a service that was stopped. Never reinstall the same version, and never stop or start a service for `--check` or when already up to date.
 

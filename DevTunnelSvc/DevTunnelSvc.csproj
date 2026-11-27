@@ -5,7 +5,8 @@
     <AssemblyName>devtunnelsvc</AssemblyName>
     <ApplicationIcon>Assets\devtunnelsvc.ico</ApplicationIcon>
     <RootNamespace>DevTunnelSvc</RootNamespace>
-    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <UseWindowsForms Condition="'$(TargetFramework)' == 'net11.0-windows'">true</UseWindowsForms>
+    <DisableWinExeOutputInference>true</DisableWinExeOutputInference>
     <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
   </PropertyGroup>
 
@@ -18,11 +19,13 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <Compile Remove="Platform\Windows\**\*.cs" Condition="'$(UseWindowsForms)' != 'true'" />
+    <Using Remove="System.Windows.Forms" />
     <!-- The SDK's minimum WebUtilities version has a published security advisory. -->
     <PackageReference Include="Microsoft.AspNetCore.WebUtilities" />
     <PackageReference Include="Microsoft.DevTunnels.Connections" />
     <PackageReference Include="System.CommandLine" />
-    <PackageReference Include="System.Security.Cryptography.ProtectedData" />
+    <PackageReference Include="System.Security.Cryptography.ProtectedData" Condition="'$(UseWindowsForms)' != 'true'" />
     <AdditionalFiles Include="CodeMetricsConfig.txt" />
     <InternalsVisibleTo Include="DevTunnelSvc.Tests" />
     <InternalsVisibleTo Include="DevTunnelSvc.UpdateSmoke" />

@@ -13,9 +13,9 @@ public sealed class CredentialTests
 {
     private DirectoryInfo directory = null!;
     private CredentialFile file = null!;
-    private readonly DateTimeOffset now = new(2026, 5, 1, 12, 0, 0, TimeSpan.Zero);
-    private GitHubCredential Initial => new("synthetic-access", now.AddSeconds(35), "synthetic-refresh", now.AddDays(7));
-    private GitHubCredential Rotated => new("new-access", now.AddHours(8), "new-refresh", now.AddDays(180));
+    private static readonly DateTimeOffset now = new(2026, 5, 1, 12, 0, 0, TimeSpan.Zero);
+    private static GitHubCredential Initial { get; } = new("synthetic-access", now.AddSeconds(35), "synthetic-refresh", now.AddDays(7));
+    private static GitHubCredential Rotated { get; } = new("new-access", now.AddHours(8), "new-refresh", now.AddDays(180));
 
     [TestInitialize]
     public void SetUp()
