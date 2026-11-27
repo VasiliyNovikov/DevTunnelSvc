@@ -6,6 +6,8 @@ var root = Environment.GetEnvironmentVariable("DEVTUNNELSVC_INSTALL_FIXTURE") ??
 var arch = Path.GetFileName(root);
 var home = Path.Combine(root, "user home");
 var image = Environment.ProcessPath!;
+const string fixtureUid = "1001";
+void Record(string call) => File.AppendAllText(Path.Combine(root, "calls"), call + "\n");
 switch (Path.GetFileNameWithoutExtension(image))
 {
     case "dotnet":
@@ -32,13 +34,29 @@ switch (Path.GetFileNameWithoutExtension(image))
         if (!destination.StartsWith(home + Path.DirectorySeparatorChar, StringComparison.Ordinal)) throw new IOException("Download escaped the fixture.");
         File.Copy(Path.Combine(root, source), destination);
         return 0;
-    case "systemctl":
-        throw new InvalidOperationException("Unexpected systemctl call.");
+    case "id":
+        if (args is not ["-u"]) throw new ArgumentException("Expected a query for the invoking UID.");
+        Console.WriteLine(fixtureUid);
+        return 0;
+    case "loginctl":
+        var lingering = Path.Combine(root, "lingering");
+        if (args is ["show-user", fixtureUid, "--property=Linger", "--value"])
+        {
+            Console.WriteLine(File.Exists(lingering) ? "yes" : "no");
+            return 0;
+        }
+        if (args is not ["--no-ask-password", "enable-linger", fixtureUid]) throw new ArgumentException("Unexpected loginctl call.");
+        Record("enable-linger");
+        if (File.Exists(Path.Combine(root, "refuse-linger"))) return 1;
+        File.WriteAllText(lingering, "yes");
+        return 0;
+    case "sudo" or "systemctl":
+        throw new InvalidOperationException($"Unexpected installer call to {Path.GetFileName(image)}.");
 }
 
 var pathComparison = OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
 if (!image.StartsWith(home + Path.DirectorySeparatorChar, pathComparison)) throw new InvalidOperationException("Ran a CLI from PATH instead of the download.");
-File.AppendAllText(Path.Combine(root, "calls"), string.Join(' ', args) + "\n");
+Record(string.Join(' ', args));
 if (args is ["--version"]) { Console.WriteLine("1.2.3"); return 0; }
 var target = FixtureFiles.InstalledCli(home);
 if (!string.Equals(image, target, pathComparison))

@@ -51,7 +51,7 @@ static async Task<string> PrepareToolsAsync(string eng, string tools)
         await RunAsync(compile);
     }
     // Fail closed if an installer tries to run dotnet or a user's CLI from PATH instead of its verified download.
-    string[] helpers = windows ? ["dotnet.exe", "devtunnelsvc.exe"] : ["dotnet", "devtunnelsvc", "uname", "curl", "systemctl"];
+    string[] helpers = windows ? ["dotnet.exe", "devtunnelsvc.exe"] : ["dotnet", "devtunnelsvc", "uname", "curl", "systemctl", "loginctl", "id", "sudo"];
     foreach (var helper in helpers) File.Copy(cli, Path.Combine(tools, helper));
     return cli;
 }
@@ -76,8 +76,18 @@ static async Task TestInstallAsync(DirectoryInfo fixture, string installer, stri
     var host = InstallerHost(root, home, tools);
     Task Install(string? error = null) => RunAsync(host, installer, error);
 
+    if (!windows)
+    {
+        var denied = Path.Combine(root, "refuse-linger");
+        File.WriteAllText(denied, "");
+        await Install("Ask an administrator to run 'loginctl enable-linger 1001'");
+        ExpectCalls(root, "--version", "enable-linger");
+        if (File.Exists(target)) throw new InvalidDataException("Installed the CLI despite the lingering policy denial.");
+        File.Delete(denied);
+    }
     await Install();
-    ExpectCalls(root, "--version", "service install", "service start", "login");
+    string[] linger = windows ? [] : ["enable-linger"];
+    ExpectCalls(root, ["--version", .. linger, "service install", "service start", "login"]);
     if (HashFile(cli) != HashFile(target)) throw new InvalidDataException("Installed the wrong CLI.");
     if (OperatingSystem.IsLinux()) File.SetUnixFileMode(target, UnixFileMode.UserRead | UnixFileMode.UserWrite);
     await Install();

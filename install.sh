@@ -8,6 +8,13 @@ install_devtunnelsvc() (
         curl -q --fail --silent --show-error --location --proto '=https' --proto-redir '=https' \
             --retry 2 --max-filesize "$3" --output "$2" "$1"
     }
+    enable_linger() {
+        uid=$(id -u)
+        if linger=$(loginctl show-user "$uid" --property=Linger --value) && [ "$linger" = yes ]; then return 0; fi
+        printf 'Enabling systemd lingering for UID %s so user services can run after logout.\n' "$uid"
+        loginctl --no-ask-password enable-linger "$uid" ||
+            fail "Could not enable systemd lingering. Ask an administrator to run 'loginctl enable-linger $uid', then rerun the installer without sudo."
+    }
 
     [ "$(uname -s)" = Linux ] || fail "Use install.ps1 on Windows; this installer requires Linux."
     case "$(uname -m)" in
@@ -15,7 +22,7 @@ install_devtunnelsvc() (
         aarch64|arm64) arch=arm64 ;;
         *) fail "Unsupported architecture: $(uname -m). Expected x64 or Arm64." ;;
     esac
-    for tool in curl jq sha256sum systemctl; do
+    for tool in curl jq sha256sum systemctl loginctl id; do
         command -v "$tool" >/dev/null 2>&1 || fail "Missing required command: $tool."
     done
     case ${HOME:-} in /*) ;; *) fail "An absolute HOME for the signed-in user is required." ;; esac
@@ -64,6 +71,7 @@ EOF
     fi
     version=$("$candidate" --version) || fail "Cannot run the verified binary. Check the Linux system dependencies in README.md."
     [ "$version" = "${tag#v}" ] || fail "Executable version does not match $tag."
+    enable_linger
     if [ "$candidate" != "$target" ]; then ln -T -- "$candidate" "$target"; fi
     printf 'Installed devtunnelsvc %s at %s\n' "$version" "$target"
     case :${PATH:-}: in

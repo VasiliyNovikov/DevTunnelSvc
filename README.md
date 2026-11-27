@@ -9,11 +9,13 @@ DevTunnelSvc hosts and connects to private Microsoft Dev Tunnels on Windows and 
 
 Run the matching command as the user who will use the tunnels, **without sudo or an elevated PowerShell**. The installer downloads the latest stable GitHub Release for your architecture, checks its size and SHA-256 digest, registers and starts the per-user service, and immediately runs GitHub device login if you're signed out. Approve the sign-in yourself in a browser. You can inspect the [Linux script](install.sh) or [Windows script](install.ps1) before running it.
 
-**Linux** (glibc 2.28+, `sh`, `curl`, `jq`, GNU coreutils, and a running systemd user manager):
+**Linux** (glibc 2.28+, `sh`, `curl`, `jq`, GNU coreutils, `loginctl`, and a running systemd user manager):
 
 ```sh
 curl -fsS https://raw.githubusercontent.com/VasiliyNovikov/DevTunnelSvc/main/install.sh | sh
 ```
+
+The Linux installer enables **systemd lingering** for your account so the service can start at boot and keep tunnels running after your last logout. This setting applies to all your systemd user services. If local policy denies the change, the installer stops and prints the command an administrator can run. Then rerun the installer as yourself.
 
 **Windows** (PowerShell 7 recommended, Windows PowerShell 5.1 also supported):
 
@@ -108,11 +110,13 @@ On both platforms, `update --check` only reports availability. `update --force` 
 
 The setting is per user and survives service restarts and updates. While the service is running, use `devtunnelsvc auto-update status` to see it or `devtunnelsvc auto-update disable` to turn it off. Unchecking the tray item does the same. Disabling does not stop any tunnels, and a stopped service does not check for releases.
 
-Plain `update` never stops a running service. To control downtime yourself, run `devtunnelsvc service stop`, `devtunnelsvc update`, then `devtunnelsvc service start`. `service run` runs in the foreground for diagnostics. Linux requires a running systemd user manager for `install` and `start`. To keep the service running after the last login session ends, configure user lingering according to your system policy.
+Plain `update` never stops a running service. To control downtime yourself, run `devtunnelsvc service stop`, `devtunnelsvc update`, then `devtunnelsvc service start`. `service run` runs in the foreground for diagnostics. Linux requires a running systemd user manager for `install` and `start`. If you installed the binary manually rather than using `install.sh`, run `loginctl enable-linger "$(id -u)"` to keep the service running after logout.
 
 If an update reports **Installed** but the service did not restart, run `devtunnelsvc service start`; there is no need to reinstall. See the [application log](#application-log) for the install, restart, and readiness results.
 
 To uninstall, run `devtunnelsvc logout` to remove the credential, then stop the service. On Windows remove the `DevTunnelSvc` value from `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`. On Linux run `systemctl --user disable devtunnelsvc.service`, remove `devtunnelsvc.service` from your systemd user configuration directory, and run `systemctl --user daemon-reload`. Then remove the downloaded executable.
+
+Removing the Linux unit leaves lingering enabled. If no other user services need it, you can turn it off with `loginctl disable-linger "$(id -u)"`.
 
 ## Application log
 
