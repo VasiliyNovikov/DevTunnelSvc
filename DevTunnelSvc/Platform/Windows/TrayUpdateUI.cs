@@ -61,7 +61,8 @@ internal sealed partial class TrayUpdate
         var previous = SynchronizationContext.Current;
         try
         {
-            using var owner = new Form { ShowInTaskbar = false, TopMost = true };
+            using var owner = TrayDialog.CreateOwner();
+            owner.TopMost = true;
             return MessageBox.Show(owner, text, title, buttons, icon, defaultButton);
         }
         finally { SynchronizationContext.SetSynchronizationContext(previous); }

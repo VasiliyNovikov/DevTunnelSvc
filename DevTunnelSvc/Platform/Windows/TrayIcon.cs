@@ -17,7 +17,7 @@ internal sealed class TrayIcon : IDisposable
         var ready = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         thread = new Thread(() =>
         {
-            try { Run(pipeName, writeEvent, show, ready.SetResult, shutdown.Token); }
+            try { Run(pipeName, writeEvent, show, ready.SetResult); }
             catch (Exception ex) { if (!ready.TrySetException(ex)) stopped(ex); return; }
             stopped(null);
         })
@@ -28,23 +28,24 @@ internal sealed class TrayIcon : IDisposable
         catch { shutdown.Dispose(); throw; }
     }
 
-    private static void Run(string pipeName, Action<string> writeEvent, Action<NotifyIcon> show, Action ready, CancellationToken ct)
+    private void Run(string pipeName, Action<string> writeEvent, Action<NotifyIcon> show, Action ready)
     {
         Application.SetUnhandledExceptionMode(UnhandledExceptionMode.CatchException, threadScope: true);
         Application.SetHighDpiMode(HighDpiMode.PerMonitorV2);
         Application.EnableVisualStyles();
         Application.SetColorMode(SystemColorMode.System);
 
-        using var owner = new Form { ShowInTaskbar = false };
+        var ct = shutdown.Token;
+        using var owner = TrayDialog.CreateOwner();
         _ = owner.Handle; // Marshal service shutdown to the tray thread even when no dialog is open.
         using var icon = TrayDialog.LoadArtwork(SystemInformation.SmallIconSize.Width);
-        using var actions = new TrayMenu(pipeName, Application.ExitThread, TrayMenu.LaunchUpdater, content => TrayDialog.ShowOwned(owner, icon, content), writeEvent);
-        using var popup = CreatePopup(owner, actions, ct);
+        using var actions = new TrayMenu(pipeName, shutdown.Cancel, TrayMenu.LaunchUpdater, content => TrayDialog.ShowOwned(owner, icon, content), writeEvent);
+        using var popup = CreatePopup(actions, ct);
         using var tray = new NotifyIcon { Icon = icon, Text = "DevTunnelSvc", ContextMenuStrip = popup };
         show(tray);
         using var stop = ct.Register(() => owner.BeginInvoke((Action)(async () =>
         {
-            await actions.Pending;
+            await actions.PendingStatus;
             Application.ExitThread();
         })));
         Pump(ready);
@@ -60,11 +61,11 @@ internal sealed class TrayIcon : IDisposable
         if (failure is not null) ExceptionDispatchInfo.Throw(failure);
     }
 
-    internal static ContextMenuStrip CreatePopup(Form owner, TrayMenu actions, CancellationToken ct)
+    internal static ContextMenuStrip CreatePopup(TrayMenu actions, CancellationToken ct)
     {
         var popup = new ContextMenuStrip { ShowImageMargin = false };
         ToolStripItem Add(string text, TrayMenu.Command command) => popup.Items.Add(text, null, async (_, _) => await actions.SelectAsync(command, ct));
-        Add("&Status", TrayMenu.Command.Status);
+        var status = Add("&Status", TrayMenu.Command.Status);
         var update = Add("&Update", TrayMenu.Command.Update);
         Add("&About", TrayMenu.Command.About);
         popup.Items.Add(new ToolStripSeparator());
@@ -72,9 +73,9 @@ internal sealed class TrayIcon : IDisposable
         popup.Opening += (_, e) =>
         {
             Application.SetColorMode(SystemColorMode.System);
+            status.Enabled = actions.PendingStatus.IsCompleted;
             update.Enabled = !actions.Updating;
-            e.Cancel = ct.IsCancellationRequested || !actions.Pending.IsCompleted;
-            if (owner.OwnedForms is [var dialog, ..]) { e.Cancel = true; dialog.Activate(); }
+            e.Cancel = ct.IsCancellationRequested;
         };
         return popup;
     }

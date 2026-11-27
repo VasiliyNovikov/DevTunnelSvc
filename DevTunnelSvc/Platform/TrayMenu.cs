@@ -14,12 +14,14 @@ internal sealed class TrayMenu(string pipeName, Action exit, Func<Process> launc
     internal enum Command { Status, Update, About, Exit }
     private Process? updater;
     internal bool Updating => updater is { HasExited: false };
-    internal Task Pending { get; private set; } = Task.CompletedTask;
+    internal Task PendingStatus { get; private set; } = Task.CompletedTask;
 
     internal Task SelectAsync(Command command, CancellationToken ct)
     {
-        if (Pending.IsCompleted && !ct.IsCancellationRequested) Pending = ExecuteAsync(command, ct);
-        return Pending;
+        if (ct.IsCancellationRequested) return Task.CompletedTask;
+        if (command != Command.Status) return ExecuteAsync(command, ct);
+        if (PendingStatus.IsCompleted) PendingStatus = ExecuteAsync(command, ct);
+        return PendingStatus;
     }
 
     private async Task ExecuteAsync(Command command, CancellationToken ct)

@@ -7,7 +7,11 @@ namespace DevTunnelSvc.Platform;
 
 internal sealed class TrayDialog : Form
 {
+    private readonly Control body;
     private bool dark = Application.IsDarkModeEnabled;
+
+    // A hidden owner never paints. If WinForms defers its reveal, DWM keeps its owned dialogs cloaked too.
+    internal static Form CreateOwner() => new() { ShowInTaskbar = false, FormRevealMode = FormRevealMode.Classic };
 
     [UnconditionalSuppressMessage("SingleFile", "IL3000", Justification = "Use the bundled executable's icon when the managed module has no file path.")]
     internal static Icon LoadArtwork(int pixels)
@@ -19,9 +23,25 @@ internal sealed class TrayDialog : Form
 
     internal static void ShowOwned(Form owner, Icon icon, TrayDialogContent content)
     {
-        var dialog = new TrayDialog(icon, content);
-        try { dialog.Show(owner); dialog.Activate(); }
+        var dialog = GetOrCreate(owner, icon, content);
+        try
+        {
+            if (dialog.WindowState == FormWindowState.Minimized) dialog.WindowState = FormWindowState.Normal;
+            dialog.Show();
+            dialog.Activate();
+        }
         catch { dialog.Dispose(); throw; }
+    }
+
+    internal static TrayDialog GetOrCreate(Form owner, Icon icon, TrayDialogContent content)
+    {
+        foreach (var window in owner.OwnedForms)
+        {
+            if (window is not TrayDialog dialog || dialog.Text != content.Title) continue;
+            dialog.body.Text = content.Text;
+            return dialog;
+        }
+        return new TrayDialog(icon, content) { Owner = owner };
     }
 
     internal TrayDialog(Icon titleIcon, TrayDialogContent content)
@@ -41,7 +61,8 @@ internal sealed class TrayDialog : Form
         layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
         layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         layout.Controls.Add(Artwork(), 0, 0);
-        layout.Controls.Add(Body(content), 1, 0);
+        body = Body(content);
+        layout.Controls.Add(body, 1, 0);
         var ok = new Button { Text = "OK", Anchor = AnchorStyles.Right, AutoSize = true, MinimumSize = new Size(80, 25), UseVisualStyleBackColor = true };
         ok.Click += (_, _) => Close();
         layout.Controls.Add(ok, 1, 1);

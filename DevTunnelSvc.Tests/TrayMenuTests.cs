@@ -54,7 +54,7 @@ public sealed class TrayMenuTests
         {
             var selection = menu.SelectAsync(TrayMenu.Command.Status, limit.Token);
             await server.WaitForConnectionAsync(limit.Token);
-            Assert.AreSame(selection, menu.SelectAsync(TrayMenu.Command.About, limit.Token), "A pending query cannot open a second dialog.");
+            Assert.AreSame(selection, menu.SelectAsync(TrayMenu.Command.Status, limit.Token), "A second Status click must not send another query.");
             Assert.AreEqual(new Request("status"), await Control.ReadAsync(server, ControlJson.Default.Request, limit.Token));
             await Control.WriteAsync(server, reply, ControlJson.Default.Reply, limit.Token);
             await selection.WaitAsync(limit.Token);
@@ -81,19 +81,24 @@ public sealed class TrayMenuTests
     }
 
     [TestMethod]
-    public async Task ShutdownCancelsPendingStatusWithoutDisplayingAnotherWindow()
+    public async Task OtherCommandsRemainAvailableAndExitCanCancelPendingStatus()
     {
         var pipe = $"devtunnel-tray-{Guid.NewGuid():N}";
-        using var menu = new TrayMenu(pipe, () => Assert.Fail(), () => throw new AssertFailedException(), _ => Assert.Fail(), _ => { });
+        using var shutdown = new CancellationTokenSource();
+        List<TrayDialogContent> dialogs = [];
+        using var menu = new TrayMenu(pipe, shutdown.Cancel, () => throw new AssertFailedException(), dialogs.Add, _ => { });
         using var server = new NamedPipeServerStream(pipe, PipeDirection.InOut, 1, PipeTransmissionMode.Byte, Control.Options);
         using var limit = new CancellationTokenSource(TimeSpan.FromSeconds(5));
-        using var shutdown = new CancellationTokenSource();
         var selection = menu.SelectAsync(TrayMenu.Command.Status, shutdown.Token);
         await server.WaitForConnectionAsync(limit.Token);
         _ = await Control.ReadAsync(server, ControlJson.Default.Request, limit.Token);
-        await shutdown.CancelAsync();
-        await selection.WaitAsync(limit.Token);
+        await menu.SelectAsync(TrayMenu.Command.About, shutdown.Token);
+        Assert.IsFalse(selection.IsCompleted);
         await menu.SelectAsync(TrayMenu.Command.Exit, shutdown.Token);
+        Assert.IsTrue(shutdown.IsCancellationRequested);
+        await selection.WaitAsync(limit.Token);
+        await menu.SelectAsync(TrayMenu.Command.Status, shutdown.Token);
+        Assert.AreEqual("About DevTunnelSvc", dialogs.Single().Title);
     }
 
     [TestMethod]
