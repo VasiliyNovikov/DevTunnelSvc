@@ -31,16 +31,12 @@ internal sealed class TrayIcon : IDisposable
     private void Run(string pipeName, Action<string> writeEvent, Func<bool> autoUpdateEnabled, Action<NotifyIcon> show, Action ready)
     {
         Application.SetUnhandledExceptionMode(UnhandledExceptionMode.CatchException, threadScope: true);
-        Application.SetHighDpiMode(HighDpiMode.PerMonitorV2);
-        Application.EnableVisualStyles();
-        Application.SetColorMode(SystemColorMode.System);
-
         var ct = shutdown.Token;
-        using var owner = TrayDialog.CreateOwner();
+        using var owner = TrayWindowHost.CreateOwner();
         _ = owner.Handle; // Marshal service shutdown to the tray thread even when no dialog is open.
         using var icon = TrayDialog.LoadArtwork(SystemInformation.SmallIconSize.Width);
         using var actions = new TrayMenu(pipeName, shutdown.Cancel, TrayMenu.LaunchUpdater, content => TrayDialog.ShowOwned(owner, icon, content), writeEvent);
-        using var popup = CreatePopup(actions, autoUpdateEnabled, text => TrayUpdate.ConfirmAutoUpdate(owner, icon, text, ct), ct);
+        using var popup = CreatePopup(actions, autoUpdateEnabled, text => TrayWindowHost.ConfirmAutoUpdate(owner, icon, text, ct), ct);
         using var tray = new NotifyIcon { Icon = icon, Text = "DevTunnelSvc", ContextMenuStrip = popup };
         show(tray);
         using var stop = ct.Register(() => owner.BeginInvoke((Action)(async () =>

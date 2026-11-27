@@ -58,21 +58,14 @@ internal sealed class Commands(TextReader input, TextWriter output, TextWriter e
     }
 
 #if WINDOWS
-    private Command TrayUpdateCommand()
+    private static Command TrayUpdateCommand()
     {
         var pid = new Argument<int>("service-pid");
         var command = new Command(TrayMenu.UpdateWorker) { Hidden = true };
         var tag = new Option<string?>(UpdateWorker.TagOption) { Hidden = true };
         command.Arguments.Add(pid);
         command.Options.Add(tag);
-        command.SetAction(async (r, ct) =>
-        {
-            var servicePid = r.GetRequiredValue(pid);
-            if (r.GetValue(tag) is not { } expected) return await TrayUpdate.FromMenuAsync(servicePid, ct);
-            var message = await TrayUpdate.FromCopyAsync(servicePid, expected, ct);
-            if (message is not null) output.WriteLine(message);
-            return 0;
-        });
+        command.SetAction((r, ct) => TrayUpdateUI.FromTrayAsync(r.GetRequiredValue(pid), r.GetValue(tag), ct));
         return command;
     }
 #endif

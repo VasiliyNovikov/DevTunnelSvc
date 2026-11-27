@@ -1,4 +1,3 @@
-using System.Drawing;
 using System.Globalization;
 using System.Windows.Forms;
 using DevTunnelSvc.Auth;
@@ -8,72 +7,67 @@ using ControlPipe = DevTunnelSvc.Service.Control;
 
 namespace DevTunnelSvc.Platform;
 
-internal sealed partial class TrayUpdate
+internal sealed class TrayUpdateUI(HttpClient http, Func<UpdateInstallation> installation, Func<TrayDialogContent, string?, DialogResult> prompt)
 {
     private const string Caption = "DevTunnelSvc Update";
+    private const int ErrorDisplayedExitCode = 3;
 
-    internal static bool ConfirmAutoUpdate(Form owner, Icon icon, string question, CancellationToken ct)
+    public static async Task<int> FromTrayAsync(int servicePid, string? expectedTag, CancellationToken ct)
     {
-        ct.ThrowIfCancellationRequested();
-        using var dialog = new TrayDialog(icon, new("DevTunnelSvc Auto-update", question.ReplaceLineEndings()), confirm: true);
-        using var cancel = ct.Register(() => owner.BeginInvoke((Action)(() => { if (!dialog.IsDisposed) dialog.Close(); })));
-        return dialog.ShowDialog(owner) == DialogResult.Yes;
+        using var client = GitHubOAuth.CreateClient();
+        return await new TrayUpdateUI(client, Program.GetUpdateInstallation, TrayWindowHost.Prompt).RunAsync(servicePid, expectedTag, ct);
     }
 
-    internal static Task<int> FromMenuAsync(int servicePid, CancellationToken ct) => WithFeedbackAsync(async () =>
+    internal async Task<int> RunAsync(int servicePid, string? expectedTag, CancellationToken ct)
+    {
+        try
+        {
+            return expectedTag is null ? await RunFromMenuAsync(servicePid, ct) : await RunFromCopyAsync(servicePid, expectedTag, ct);
+        }
+        catch (Exception ex) { ReportError(AppLog.Detail(ex)); return expectedTag is null ? 1 : ErrorDisplayedExitCode; }
+    }
+
+    private void Inform(string text) => prompt(new(Caption, text), null);
+    private void ReportError(string text) => prompt(new("DevTunnelSvc Update Error", text, Scrollable: true), null);
+
+    private async Task<int> RunFromMenuAsync(int servicePid, CancellationToken ct)
     {
         using var service = SafeProcessHandle.Open(servicePid); // Pin this instance through confirmation and installation.
-        using var http = GitHubOAuth.CreateClient();
-        var message = await new ReleaseUpdate(http).CheckAsync(Program.Version, false, (release, t) =>
-        {
-            Program.RequireSingleFileUpdate();
-            var log = new AppLog(InstanceLease.DefaultDirectory, "update", Console.Error.WriteLine);
-            log.Write($"Updating {Program.Version} to {release.TagName}.");
-            return UpdateWorker.RunAsync(ServiceLifetime.ApplicationExecutable(), [TrayMenu.UpdateWorker, servicePid.ToString(CultureInfo.InvariantCulture)],
-                release.TagName, log, t);
-        }, ct);
-        return message.Length == 0 ? null : message;
-    }, text => Prompt(text, Caption, MessageBoxButtons.OK, MessageBoxIcon.Information),
-        text => Prompt(text, "DevTunnelSvc", MessageBoxButtons.OK, MessageBoxIcon.Error));
+        var release = await new ReleaseUpdate(http).FindNewerAsync(Program.Version, ct);
+        if (release is null) { Inform(ReleaseUpdate.UpToDate(Program.Version)); return 0; }
+        var target = installation();
+        var log = new AppLog(target.Directory, "update", Console.Error.WriteLine);
+        log.Write($"Updating {Program.Version} to {release.TagName}.");
+        // After replacement this process can't lazy-load WinForms from its original bundle.
+        var result = await UpdateWorker.RunAsync(target.Image, [TrayMenu.UpdateWorker, servicePid.ToString(CultureInfo.InvariantCulture)],
+            release.TagName, log, ErrorDisplayedExitCode, ct);
+        return result.ExitCode == 0 ? 0 : 1;
+    }
 
-    internal static async Task<string?> FromCopyAsync(int servicePid, string expected, CancellationToken ct)
+    private async Task<int> RunFromCopyAsync(int servicePid, string expected, CancellationToken ct)
     {
-        Program.RequireSingleFileUpdate();
-        var image = ServiceLifetime.ApplicationExecutable();
-        var installed = UpdateWorker.InstalledPath(image);
-        var directory = InstanceLease.DefaultDirectory;
-        var log = new AppLog(directory, "update", Console.Error.WriteLine);
+        var target = installation();
+        var installed = UpdateWorker.InstalledPath(target.Image);
+        var log = new AppLog(target.Directory, "update", Console.Error.WriteLine);
         using var service = SafeProcessHandle.Open(servicePid);
-        using var http = GitHubOAuth.CreateClient();
         var updater = new ReleaseUpdate(http);
         var flow = new TrayUpdate(async t =>
         {
             var release = await updater.FindNewerAsync(Program.Version, t);
             if (release is not null) UpdateWorker.RequireTag(expected, release.TagName);
             return release;
-        }, text => Prompt(text, Caption, MessageBoxButtons.YesNo, MessageBoxIcon.Warning, MessageBoxDefaultButton.Button2) == DialogResult.Yes, t =>
+        }, text => prompt(new(Caption, text), "Install") == DialogResult.Yes, t =>
         {
             log.Write($"Stopping service PID {servicePid}.");
-            return UpdateHandoff.StopAsync(servicePid, (r, token) => ControlPipe.SendAsync(r, ControlPipe.PipeName, token), t);
+            return UpdateHandoff.StopAsync(servicePid, (r, token) => ControlPipe.SendAsync(r, target.Pipe, token), t);
         }, async (release, t) =>
         {
-            await WaitForExitAsync(service.WaitForExitAsync);
-            await updater.ApplyAsync(release, installed, () => UpdateWorker.AcquireLease(image, installed, directory), t);
-        }, () => UpdateHandoff.StartInstalledAsync(installed, ServiceLifetime.ExitCodeAsync, log.Write), log.Write);
-        return await log.TraceAsync("Worker", () => UpdateWorker.UntilParentClosesAsync(UpdateWorker.ParentClosed(), t => flow.RunAsync(Program.Version, t), ct));
-    }
-
-    private static DialogResult Prompt(string text, string title, MessageBoxButtons buttons, MessageBoxIcon icon,
-        MessageBoxDefaultButton defaultButton = MessageBoxDefaultButton.Button1)
-    {
-        // The helper has no message pump after the prompt. Don't capture a WinForms context for its async install.
-        var previous = SynchronizationContext.Current;
-        try
-        {
-            using var owner = TrayDialog.CreateOwner();
-            owner.TopMost = true;
-            return MessageBox.Show(owner, text, title, buttons, icon, defaultButton);
-        }
-        finally { SynchronizationContext.SetSynchronizationContext(previous); }
+            await TrayUpdate.WaitForExitAsync(service.WaitForExitAsync);
+            await updater.ApplyAsync(release, installed, () => UpdateWorker.AcquireLease(target.Image, installed, target.Directory), t);
+        }, () => UpdateHandoff.StartInstalledAsync(installed, target.RunInstalled, log.Write), log.Write);
+        var code = await TrayUpdate.WithFeedbackAsync(
+            () => log.TraceAsync("Worker", () => UpdateWorker.UntilParentClosesAsync(target.ParentClosed(), t => flow.RunAsync(Program.Version, t), ct)),
+            Inform, text => ReportError($"{text}\nApplication log: {log.FilePath}"));
+        return code == 0 ? 0 : ErrorDisplayedExitCode;
     }
 }

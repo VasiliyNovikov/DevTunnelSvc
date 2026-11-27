@@ -23,6 +23,8 @@ public sealed class UpdateWorkerTests
             var error = await Assert.ThrowsExactlyAsync<InvalidOperationException>(() => UpdateWorker.RunAsync(installed, fail, "v2.0.0", log, timeout.Token));
             Assert.Contains("exited with code 19", error.Message);
             Assert.Contains(log.FilePath, error.Message);
+            var handled = await UpdateWorker.RunAsync(installed, fail, "v2.0.0", log, handledExitCode: 19, timeout.Token);
+            Assert.AreEqual(19, handled.ExitCode); // A helper that showed the failure still returns a failure.
             Assert.IsEmpty(root.GetDirectories());
             Assert.IsTrue(File.Exists(installed));
         }

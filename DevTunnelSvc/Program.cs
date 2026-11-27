@@ -59,11 +59,14 @@ internal static class Program
         new DeviceLogin(Http, Task.Delay, options.OpenBrowser ? LoginBrowser.OpenAsync : null,
             options.CopyToClipboard ? LoginClipboard.TryCopyAsync : null).SignInAsync(output, ct);
 
-    internal static Task<string> UpdateAsync(UpdateOptions options, CancellationToken ct) => new CliUpdate(Http, Version, () =>
+    internal static Task<string> UpdateAsync(UpdateOptions options, CancellationToken ct) =>
+        new CliUpdate(Http, Version, GetUpdateInstallation).RunAsync(options, ct);
+
+    internal static UpdateInstallation GetUpdateInstallation()
     {
         RequireSingleFileUpdate();
         return new(ServiceLifetime.ApplicationExecutable(), InstanceLease.DefaultDirectory, Control.PipeName, ServiceLifetime.ExitCodeAsync, UpdateWorker.ParentClosed);
-    }).RunAsync(options, ct);
+    }
 
     internal static AutoUpdateActions BackgroundUpdates { get; } = new(RequireSingleFileUpdate,
         ct => new ReleaseUpdate(Http).FindNewerAsync(Version, ct),

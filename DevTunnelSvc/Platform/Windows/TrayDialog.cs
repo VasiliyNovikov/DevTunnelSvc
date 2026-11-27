@@ -10,9 +10,6 @@ internal sealed class TrayDialog : Form
     private readonly Control body;
     private bool dark = Application.IsDarkModeEnabled;
 
-    // A hidden owner never paints. If WinForms defers its reveal, DWM keeps its owned dialogs cloaked too.
-    internal static Form CreateOwner() => new() { ShowInTaskbar = false, FormRevealMode = FormRevealMode.Classic };
-
     [UnconditionalSuppressMessage("SingleFile", "IL3000", Justification = "Use the bundled executable's icon when the managed module has no file path.")]
     internal static Icon LoadArtwork(int pixels)
     {
@@ -44,7 +41,7 @@ internal sealed class TrayDialog : Form
         return new TrayDialog(icon, content) { Owner = owner };
     }
 
-    internal TrayDialog(Icon titleIcon, TrayDialogContent content, bool confirm = false)
+    internal TrayDialog(Icon titleIcon, TrayDialogContent content, string? confirmAction = null)
     {
         Text = content.Title;
         Icon = titleIcon;
@@ -53,7 +50,7 @@ internal sealed class TrayDialog : Form
         FormBorderStyle = FormBorderStyle.FixedDialog;
         AutoScaleDimensions = new SizeF(96, 96);
         AutoScaleMode = AutoScaleMode.Dpi;
-        ClientSize = confirm || content.Scrollable ? new Size(600, 290) : new Size(408, 144);
+        ClientSize = confirmAction is not null || content.Scrollable ? new Size(600, 290) : new Size(408, 144);
         var layout = new TableLayoutPanel { Dock = DockStyle.Fill, Padding = new Padding(16), ColumnCount = 2, RowCount = 2 };
         Controls.Add(layout);
         layout.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
@@ -63,10 +60,10 @@ internal sealed class TrayDialog : Form
         layout.Controls.Add(Artwork(), 0, 0);
         body = Body(content);
         layout.Controls.Add(body, 1, 0);
-        AddButtons(layout, confirm);
+        AddButtons(layout, confirmAction);
     }
 
-    private void AddButtons(TableLayoutPanel layout, bool confirm)
+    private void AddButtons(TableLayoutPanel layout, string? confirmAction)
     {
         var buttons = new FlowLayoutPanel { AutoSize = true, Anchor = AnchorStyles.Right, WrapContents = false };
         Button Add(string text, DialogResult result)
@@ -75,8 +72,8 @@ internal sealed class TrayDialog : Form
             buttons.Controls.Add(button);
             return button;
         }
-        if (confirm) Add("Enable", DialogResult.Yes);
-        var dismiss = Add(confirm ? "Cancel" : "OK", DialogResult.Cancel);
+        if (confirmAction is not null) Add(confirmAction, DialogResult.Yes);
+        var dismiss = Add(confirmAction is null ? "OK" : "Cancel", DialogResult.Cancel);
         dismiss.Click += (_, _) => Close();
         layout.Controls.Add(buttons, 1, 1);
         AcceptButton = CancelButton = dismiss;

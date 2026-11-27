@@ -11,7 +11,11 @@ internal static class UpdateWorker
 
     // The .NET bundle loader can reopen its executable to load another assembly at any time.
     // Keep the worker's own image unchanged until all install and restart work has finished.
-    internal static async Task<string> RunAsync(string installed, string[] arguments, string tag, AppLog log, CancellationToken ct)
+    internal static async Task<string> RunAsync(string installed, string[] arguments, string tag, AppLog log, CancellationToken ct) =>
+        (await RunAsync(installed, arguments, tag, log, handledExitCode: null, ct)).Output;
+
+    internal static async Task<(int ExitCode, string Output)> RunAsync(string installed, string[] arguments, string tag, AppLog log,
+        int? handledExitCode, CancellationToken ct)
     {
         ct.ThrowIfCancellationRequested();
         var directory = Path.Combine(Path.GetDirectoryName(installed)!, Prefix + Guid.NewGuid().ToString("N"));
@@ -23,8 +27,8 @@ internal static class UpdateWorker
             {
                 File.Copy(installed, worker);
                 log.Write("Launching stable update worker.");
-                var result = await RunProcessAsync(new(worker, [.. arguments, TagOption, tag]), ct);
-                log.Write("Update worker completed.");
+                var result = await RunProcessAsync(new(worker, [.. arguments, TagOption, tag]), handledExitCode, ct);
+                log.Write(result.ExitCode == 0 ? "Update worker completed." : $"Update worker exit code: {result.ExitCode}.");
                 return result;
             }
             finally { File.Delete(worker); Directory.Delete(directory); }
@@ -69,7 +73,7 @@ internal static class UpdateWorker
         if (expected != actual) throw new InvalidOperationException("The latest release changed. Check for updates again.");
     }
 
-    private static async Task<string> RunProcessAsync(ProcessStartInfo info, CancellationToken ct)
+    private static async Task<(int ExitCode, string Output)> RunProcessAsync(ProcessStartInfo info, int? handledExitCode, CancellationToken ct)
     {
         ct.ThrowIfCancellationRequested();
         info.CreateNoWindow = true;
@@ -83,10 +87,10 @@ internal static class UpdateWorker
         // Cancellation signals the worker via stdin; still wait for its owed restart.
         child.WaitForExit();
         var message = (await error).TrimEnd();
-        if (child.ExitCode != 0)
+        if (child.ExitCode != 0 && child.ExitCode != handledExitCode)
             throw new InvalidOperationException(message.Length != 0 ? message : $"The update worker exited with code {child.ExitCode}.");
         if (message.Length != 0) Console.Error.WriteLine(message);
-        return (await output).TrimEnd();
+        return (child.ExitCode, (await output).TrimEnd());
     }
 
     internal static async Task<T> UntilParentClosesAsync<T>(Task parentClosed, Func<CancellationToken, Task<T>> run, CancellationToken ct)

@@ -56,7 +56,8 @@ static void TestUpdate(DirectoryInfo work, Scenario scenario, string oldImage, s
     {
         cli.Run(["service", "start"]);
         var before = cli.Run(["smoke-pid"]);
-        if (scenario == Scenario.StartFailure) File.WriteAllText(Path.Combine(state, "reject-start"), "");
+        var rejectStart = scenario is Scenario.StartFailure or Scenario.TrayStartFailure;
+        if (rejectStart) File.WriteAllText(Path.Combine(state, "reject-start"), "");
         string reply;
         if (scenario == Scenario.Automatic)
         {
@@ -64,6 +65,15 @@ static void TestUpdate(DirectoryInfo work, Scenario scenario, string oldImage, s
             reply = cli.WithInput(["auto-update", "enable"], "yes");
             Expect(reply, "connections will be interrupted", "Auto-update is enabled.");
             WaitForAutomaticUpdate(state, install);
+        }
+        else if (scenario is Scenario.Tray or Scenario.TrayStartFailure)
+        {
+            cli.Run(["__tray-update", before], rejectStart ? 1 : 0);
+            var dialogs = File.ReadAllLines(Path.Combine(state, "dialogs"));
+            if (dialogs.Length != 2) throw new InvalidDataException("Expected one confirmation and one outcome dialog.");
+            Expect(dialogs[0], "copy|Install|DevTunnelSvc Update|Install v2.0.0");
+            reply = dialogs[1];
+            Expect(reply, rejectStart ? "copy|OK|DevTunnelSvc Update Error|" : "copy|OK|DevTunnelSvc Update|Installed v2.0.0 and restarted");
         }
         else reply = cli.Run(["update", "--force"], scenario == Scenario.Success ? 0 : 1);
         var log = File.ReadAllText(Path.Combine(state, "app.log"));
@@ -73,7 +83,7 @@ static void TestUpdate(DirectoryInfo work, Scenario scenario, string oldImage, s
             throw new InvalidDataException($"Wrong installed executable after {scenario}.");
         if (install.EnumerateDirectories().Any()) throw new InvalidDataException($"Update helper left behind after {scenario}.");
 
-        if (scenario == Scenario.StartFailure)
+        if (rejectStart)
         {
             Expect(reply, "exited with code 37", "Application log:");
             Expect(log, "service start exit code: 37");
@@ -92,7 +102,12 @@ static void TestUpdate(DirectoryInfo work, Scenario scenario, string oldImage, s
                     Expect(cli.Run(["auto-update", "status"]), "enabled");
                     Expect(cli.Run(["auto-update", "disable"]), "disabled");
                 }
-                Expect(cli.Run(["update", "--force"]), "Already up to date");
+                if (scenario == Scenario.Tray)
+                {
+                    cli.Run(["__tray-update", after]);
+                    Expect(File.ReadAllLines(Path.Combine(state, "dialogs"))[^1], "installed|OK|DevTunnelSvc Update|Already up to date (2.0.0).");
+                }
+                else Expect(cli.Run(["update", "--force"]), "Already up to date");
                 if (cli.Run(["smoke-pid"]) != after) throw new InvalidOperationException("Restarted an up-to-date service.");
             }
         }
@@ -127,7 +142,7 @@ static void Expect(string actual, params string[] fragments)
         if (!actual.Contains(expected, StringComparison.Ordinal)) throw new InvalidDataException($"Missing '{expected}' in: {actual}");
 }
 
-internal enum Scenario { Success, BadDigest, StartFailure, Automatic }
+internal enum Scenario { Success, BadDigest, StartFailure, Automatic, Tray, TrayStartFailure }
 
 internal sealed class FixtureCli(string image, string state)
 {

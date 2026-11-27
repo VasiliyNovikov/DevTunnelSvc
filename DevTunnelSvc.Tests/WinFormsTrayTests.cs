@@ -94,7 +94,7 @@ public sealed class WinFormsTrayTests
         try
         {
             Application.SetDefaultFormRevealMode(FormRevealMode.Deferred);
-            using var owner = TrayDialog.CreateOwner();
+            using var owner = TrayWindowHost.CreateOwner();
             Assert.IsFalse(owner.Visible);
             Assert.AreEqual(FormRevealMode.Classic, owner.FormRevealMode);
             var hr = DwmGetWindowAttribute(owner.Handle, 14, out var cloak, sizeof(int)); // DWMWA_CLOAKED
@@ -110,7 +110,7 @@ public sealed class WinFormsTrayTests
     {
         using var icon = TrayDialog.LoadArtwork(16);
         TrayDialog status;
-        using (var owner = TrayDialog.CreateOwner())
+        using (var owner = TrayWindowHost.CreateOwner())
         {
             var initial = new TrayDialogContent("DevTunnelSvc Status", "First report", true);
             status = TrayDialog.GetOrCreate(owner, icon, initial);
@@ -141,12 +141,56 @@ public sealed class WinFormsTrayTests
     public void ConsentDialogDefaultsToCancelAndRequiresChoosingEnable()
     {
         using var icon = TrayDialog.LoadArtwork(16);
-        using var form = new TrayDialog(icon, new("DevTunnelSvc Auto-update", Updates.AutoUpdateConsent.Question), confirm: true);
+        using var form = new TrayDialog(icon, new("DevTunnelSvc Auto-update", Updates.AutoUpdateConsent.Question), confirmAction: "Enable");
         var buttons = ((TableLayoutPanel)form.Controls[0]).Controls.OfType<FlowLayoutPanel>().Single().Controls.OfType<Button>();
         Assert.AreEqual(DialogResult.Yes, buttons.Single(button => button.Text == "Enable").DialogResult);
         Assert.AreSame((Button)form.CancelButton!, form.ActiveControl);
         Assert.AreSame(form.AcceptButton, form.CancelButton);
         Assert.AreEqual("Cancel", ((Button)form.CancelButton!).Text);
+    }
+
+    [TestMethod]
+    [DoNotParallelize]
+    [DataRow("Already up to date (1.2.3).", null, false)]
+    [DataRow("Install failed.\nThe service was restarted.", null, true)]
+    [DataRow("Install v2.0.0?\nActive mappings will stop.", "Install", false)]
+    public void StandaloneUpdatePromptsFollowSystemThemeWithoutCapturingTheUpdaterThread(string text, string? confirm, bool error)
+    {
+        var previousMode = Application.ColorMode;
+        var previousContext = SynchronizationContext.Current;
+        var caller = Environment.CurrentManagedThreadId;
+        var content = new TrayDialogContent(error ? "DevTunnelSvc Update Error" : "DevTunnelSvc Update", text, error);
+        try
+        {
+            Application.SetColorMode(SystemColorMode.Classic); // A fresh worker hasn't inherited the service's WinForms settings.
+            var callerContext = SynchronizationContext.Current;
+            var answer = TrayWindowHost.Prompt(content, confirm, (dialog, owner) =>
+            {
+                Assert.AreNotEqual(caller, Environment.CurrentManagedThreadId);
+                Assert.AreEqual(ApartmentState.STA, Thread.CurrentThread.GetApartmentState());
+                Assert.AreEqual(SystemColorMode.System, Application.ColorMode);
+                if (OperatingSystem.IsWindowsVersionAtLeast(10, 0, 22000)
+                    && DwmGetWindowAttribute(dialog.Handle, 20, out var darkTitle, sizeof(int)) == 0) // DWMWA_USE_IMMERSIVE_DARK_MODE
+                    Assert.AreEqual(Application.IsDarkModeEnabled, darkTitle != 0);
+                Assert.AreEqual(FormRevealMode.Classic, owner.FormRevealMode);
+                Assert.IsTrue(owner.TopMost);
+                Assert.AreEqual(content.Title, dialog.Text);
+                var layout = (TableLayoutPanel)dialog.Controls[0];
+                var body = layout.GetControlFromPosition(1, 0)!;
+                _ = body.Handle;
+                Assert.AreEqual(content.Text, body.Text.ReplaceLineEndings("\n"));
+                Assert.AreEqual(error, body is RichTextBox);
+                Assert.AreEqual(SystemColors.Control.ToArgb(), body.BackColor.ToArgb());
+                if (!SystemInformation.HighContrast)
+                    Assert.AreEqual(Application.IsDarkModeEnabled, body.BackColor.GetBrightness() < body.ForeColor.GetBrightness());
+                var buttons = layout.Controls.OfType<FlowLayoutPanel>().Single().Controls.OfType<Button>();
+                Assert.AreEqual(confirm is null ? "OK" : "Cancel", ((Button)dialog.AcceptButton!).Text);
+                return confirm is null ? DialogResult.OK : buttons.Single(b => b.Text == confirm).DialogResult;
+            });
+            Assert.AreEqual(confirm is null ? DialogResult.OK : DialogResult.Yes, answer);
+            Assert.AreSame(callerContext, SynchronizationContext.Current);
+        }
+        finally { Application.SetColorMode(previousMode); SynchronizationContext.SetSynchronizationContext(previousContext); }
     }
 
     [STATestMethod]

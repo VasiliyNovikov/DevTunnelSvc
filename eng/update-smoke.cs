@@ -8,11 +8,13 @@
 #:property IncludeNativeLibrariesForSelfExtract=true
 
 using System.Diagnostics;
+using System.Globalization;
 using System.Text;
 using DevTunnelSvc;
 using DevTunnelSvc.Platform;
 using DevTunnelSvc.Service;
 using DevTunnelSvc.Updates;
+using DialogResult = System.Windows.Forms.DialogResult;
 
 // Only this fixture accepts a test state directory. Never use the production pipe, tray, or credentials.
 var state = Environment.GetEnvironmentVariable("DEVTUNNELSVC_SMOKE_STATE") ?? throw new InvalidOperationException("Missing isolated state directory.");
@@ -28,16 +30,31 @@ if (args is ["smoke-pid"])
 if (args is ["service", "start"] && File.Exists(Path.Combine(state, "reject-start"))) return 37;
 
 using var http = new HttpClient(new OfflineRelease(state));
-var update = new CliUpdate(http, DevTunnelSvc.Program.Version, () =>
+UpdateInstallation Installation()
 {
     DevTunnelSvc.Program.RequireSingleFileUpdate();
     return new(image, state, pipe, ServiceLifetime.ExitCodeAsync, UpdateWorker.ParentClosed);
-});
+}
+if (args is [TrayMenu.UpdateWorker, var servicePid, ..])
+{
+    var tag = args switch { [_, _] => null, [_, _, UpdateWorker.TagOption, var value] => value, _ => throw new ArgumentException("Invalid tray worker arguments.") };
+    return await new TrayUpdateUI(http, Installation, InspectDialog).RunAsync(int.Parse(servicePid, CultureInfo.InvariantCulture), tag, limit.Token);
+}
+var update = new CliUpdate(http, DevTunnelSvc.Program.Version, Installation);
 var actions = new LocalActions((_, _, _) => throw new NotSupportedException(), update.RunAsync,
     ct => ServiceLifetime.StartAsync(true, t => Send(new("status"), t),
         t => ServiceLifetime.LaunchAsync(image, i => Process.Start(i)!.Dispose(), (_, _) => throw new NotSupportedException(), t), ct),
     _ => throw new NotSupportedException(), (log, ct) => RunService(log, ct));
 return await DevTunnelSvc.Program.RunAsync(args, Console.In, Console.Out, Console.Error, Send, actions);
+
+DialogResult InspectDialog(TrayDialogContent content, string? action) => TrayWindowHost.Prompt(content, action, (dialog, owner) =>
+{
+    _ = owner.Handle;
+    _ = dialog.Handle; // Exercise the real themed form without displaying it on the user's desktop.
+    var privateCopy = new FileInfo(image).Directory!.Name.StartsWith(".devtunnelsvc-update-", StringComparison.Ordinal);
+    File.AppendAllText(Path.Combine(state, "dialogs"), $"{(privateCopy ? "copy" : "installed")}|{action ?? "OK"}|{dialog.Text}|{content.Text.ReplaceLineEndings(" ")}\n");
+    return action is null ? DialogResult.OK : DialogResult.Yes;
+});
 
 async Task RunService(TextWriter log, CancellationToken ct)
 {

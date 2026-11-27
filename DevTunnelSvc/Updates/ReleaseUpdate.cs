@@ -19,11 +19,13 @@ internal sealed class ReleaseUpdate(HttpClient http, UpdateHandoff? force = null
     private const int MaxBytes = 256 * 1024 * 1024;
     private static readonly Uri Latest = new($"https://api.github.com/repos/{Repo}/releases/latest");
 
+    internal static string UpToDate(string current) => $"Already up to date ({current}).";
+
     public async Task<string> CheckAsync(string current, bool checkOnly, Func<ReleaseInfo, CancellationToken, Task<string>> apply, CancellationToken ct)
     {
         var release = await FindNewerAsync(current, ct);
         if (release is null)
-            return $"Already up to date ({current}).";
+            return UpToDate(current);
         if (checkOnly)
             return $"Available: {release.TagName} (installed: {current}).";
         return await apply(release, ct);

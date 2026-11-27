@@ -2,7 +2,7 @@ using DevTunnelSvc.Updates;
 
 namespace DevTunnelSvc.Platform;
 
-internal sealed partial class TrayUpdate(Func<CancellationToken, Task<ReleaseInfo?>> find, Func<string, bool> confirm,
+internal sealed class TrayUpdate(Func<CancellationToken, Task<ReleaseInfo?>> find, Func<string, bool> confirm,
     Func<CancellationToken, Task> stop, Func<ReleaseInfo, CancellationToken, Task> install, Func<Task> restart, Action<string>? trace = null)
 {
     internal async Task<string?> RunAsync(string current, CancellationToken ct)
