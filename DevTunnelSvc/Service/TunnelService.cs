@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Text.Json;
 using DevTunnelSvc.Auth;
 using DevTunnelSvc.Tunnels;
 
@@ -33,7 +34,7 @@ internal sealed class TunnelService : IAsyncDisposable
             // Only a recognized command name may reach the log, never the request or its result.
             operation = request.Command;
             var result = await execute();
-            if (operation is not ("status" or "service-pid")) writeEvent($"Command {operation} completed.");
+            if (operation is not ("status" or "service-pid" or LocalStatus.Command)) writeEvent($"Command {operation} completed.");
             return result;
         }
         catch (Exception ex) { writeEvent($"Control {operation} failed: {AppLog.ErrorCode(ex)}"); throw; }
@@ -47,6 +48,8 @@ internal sealed class TunnelService : IAsyncDisposable
         {
             "login" => () => LoginAsync(request.SignIn, ct),
             "status" => () => Task.FromResult(Status()),
+            LocalStatus.Command => () => Task.FromResult(JsonSerializer.Serialize(
+                new LocalStatus(credential.IsSignedIn, [.. sessions.Values.Select(LocalMappingStatus.From)]), StatusJson.Default.LocalStatus)),
             "service-pid" => () => Task.FromResult(Environment.ProcessId.ToString(CultureInfo.InvariantCulture)),
             "logout" => () => EndSessionAsync(logout: true),
             "create" => () => Authenticated().CreateAsync(region: null, ct),
@@ -85,7 +88,9 @@ internal sealed class TunnelService : IAsyncDisposable
         sessions.Values.Select(s => $"{s.Map.Name}  {s.State}  {s.Map.Route}")
             .Prepend(credential.IsSignedIn ? "Service running; signed in." : "Service running; signed out."));
 
-    private async Task<string> ListAsync(CancellationToken ct) => TunnelSummary.FormatTable(await Authenticated().ListAsync(ct));
+    internal Task<IReadOnlyList<TunnelSummary>> ListTunnelsAsync(CancellationToken ct) => Authenticated().ListAsync(ct);
+
+    private async Task<string> ListAsync(CancellationToken ct) => TunnelSummary.FormatTable(await ListTunnelsAsync(ct));
 
     private async Task<string> RegionsAsync(CancellationToken ct) => TunnelRegion.FormatTable(await Authenticated().ListRegionsAsync(ct));
 

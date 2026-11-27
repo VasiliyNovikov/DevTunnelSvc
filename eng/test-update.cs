@@ -68,11 +68,17 @@ static void TestUpdate(DirectoryInfo work, Scenario scenario, string oldImage, s
         }
         else if (scenario is Scenario.Tray or Scenario.TrayStartFailure)
         {
-            cli.Run(["__tray-update", before], rejectStart ? 1 : 0);
+            if (scenario == Scenario.Tray)
+            {
+                cli.Run(["__tray-update", before, "v1.5.0"], 1); // The displayed release was superseded before the worker checked.
+                Expect(File.ReadAllLines(Path.Combine(state, "dialogs")).Single(), "copy|OK|DevTunnelSvc Update Error|The latest release changed");
+                if (cli.Run(["smoke-pid"]) != before) throw new InvalidOperationException("Stopped the service for a superseded release.");
+            }
+            cli.Run(["__tray-update", before, "v2.0.0"], rejectStart ? 1 : 0);
             var dialogs = File.ReadAllLines(Path.Combine(state, "dialogs"));
-            if (dialogs.Length != 2) throw new InvalidDataException("Expected one confirmation and one outcome dialog.");
-            Expect(dialogs[0], "copy|Install|DevTunnelSvc Update|Install v2.0.0");
-            reply = dialogs[1];
+            if (dialogs.Length != (scenario == Scenario.Tray ? 3 : 2)) throw new InvalidDataException("Expected one confirmation and one outcome dialog for the selected version.");
+            Expect(dialogs[^2], "copy|Install|DevTunnelSvc Update|Install v2.0.0");
+            reply = dialogs[^1];
             Expect(reply, rejectStart ? "copy|OK|DevTunnelSvc Update Error|" : "copy|OK|DevTunnelSvc Update|Installed v2.0.0 and restarted");
         }
         else reply = cli.Run(["update", "--force"], scenario == Scenario.Success ? 0 : 1);

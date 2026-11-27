@@ -9,14 +9,18 @@ namespace DevTunnelSvc.Platform;
 
 internal sealed record TrayDialogContent(string Title, string Text, bool Scrollable = false);
 
-internal sealed class TrayMenu(string pipeName, Action exit, Func<Process> launchUpdate, Action<TrayDialogContent> show, Action<string> writeEvent) : IDisposable
+internal sealed class TrayMenu(string pipeName, Action exit, TrayQueries queries, Func<string, Process> launchUpdate,
+    Func<LocalStatus, TrayStatusTarget> openStatus, Action<TrayDialogContent> show, Action<string> writeEvent) : IDisposable
 {
     internal const string UpdateWorker = "__tray-update";
-    internal enum Command { Status, Update, About, Exit }
+    internal enum Command { Status, About, Exit }
     private Process? updater;
     internal bool Updating => updater is { HasExited: false };
+    internal string? AvailableTag => queries.Releases.AvailableTag;
+    internal bool AutoUpdateEnabled => queries.AutoUpdateEnabled();
     internal Task PendingStatus { get; private set; } = Task.CompletedTask;
     internal Task PendingConfiguration { get; private set; } = Task.CompletedTask;
+    internal Task PendingUpdate { get; private set; } = Task.CompletedTask;
 
     internal Task SelectAsync(Command command, CancellationToken ct)
     {
@@ -24,6 +28,13 @@ internal sealed class TrayMenu(string pipeName, Action exit, Func<Process> launc
         if (command != Command.Status) return ExecuteAsync(command, ct);
         if (PendingStatus.IsCompleted) PendingStatus = ExecuteAsync(command, ct);
         return PendingStatus;
+    }
+
+    internal Task SelectUpdateAsync(string? selectedTag, CancellationToken ct)
+    {
+        if (!ct.IsCancellationRequested && !Updating && PendingUpdate.IsCompleted)
+            PendingUpdate = WithFeedbackAsync(() => CheckOrUpdateAsync(selectedTag, ct), ct);
+        return PendingUpdate;
     }
 
     internal Task ConfigureAutoUpdateAsync(bool enable, Func<string, bool> confirm, CancellationToken ct)
@@ -42,14 +53,7 @@ internal sealed class TrayMenu(string pipeName, Action exit, Func<Process> launc
         switch (command)
         {
             case Command.Status:
-                var status = await ReadStatusAsync(ct);
-                ct.ThrowIfCancellationRequested();
-                show(new("DevTunnelSvc Status", status, Scrollable: true));
-                break;
-            case Command.Update when !Updating:
-                updater?.Dispose();
-                updater = null;
-                updater = launchUpdate();
+                await new TrayStatusReader(pipeName, queries.ListTunnels, writeEvent).ShowAsync(openStatus, ct);
                 break;
             case Command.About:
                 show(new("About DevTunnelSvc", $"DevTunnelSvc {Program.Version}\r\n\r\nHosts and forwards Microsoft Dev Tunnels for your Windows user."));
@@ -64,37 +68,42 @@ internal sealed class TrayMenu(string pipeName, Action exit, Func<Process> launc
     {
         try { await action(); }
         catch (OperationCanceledException) when (ct.IsCancellationRequested) { /* The tray is closing. */ }
-        catch (Exception ex) when (ex is Win32Exception or IOException or InvalidOperationException or InvalidDataException or JsonException or UnauthorizedAccessException or OperationCanceledException)
+        catch (Exception ex) when (ex is Win32Exception or IOException or HttpRequestException or InvalidOperationException or InvalidDataException or JsonException or UnauthorizedAccessException or OperationCanceledException)
         {
             writeEvent($"Tray menu failed: {AppLog.ErrorCode(ex)}");
             if (!ct.IsCancellationRequested) show(new("DevTunnelSvc", AppLog.Detail(ex), Scrollable: true));
         }
     }
 
-    private async Task<string> ReadStatusAsync(CancellationToken ct)
+    private async Task CheckOrUpdateAsync(string? selectedTag, CancellationToken ct)
     {
-        using var limit = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        limit.CancelAfter(TimeSpan.FromSeconds(2));
-        try { return await Control.SendAsync(new("status"), pipeName, limit.Token); }
-        catch (Exception ex) when (!ct.IsCancellationRequested && ex is OperationCanceledException or IOException { InnerException: TimeoutException })
+        writeEvent("Tray menu: Update.");
+        var latest = await queries.Releases.CheckAsync(ct);
+        ct.ThrowIfCancellationRequested();
+        if (latest is null)
         {
-            throw new IOException("The service did not answer the status request in time. Try again.", ex);
+            show(new("DevTunnelSvc Update", ReleaseUpdate.UpToDate(Program.Version)));
+            return;
         }
-        catch (Exception ex) when (ex is InvalidDataException or JsonException or UnauthorizedAccessException)
+        if (selectedTag is not null && selectedTag != latest)
         {
-            throw new IOException($"Could not read service status: {ex.Message}", ex);
+            show(new("DevTunnelSvc Update", $"The latest release changed. Select 'Update to {latest}' to install it."));
+            return;
         }
+        updater?.Dispose();
+        updater = null;
+        updater = launchUpdate(latest);
     }
 
-    internal static Process LaunchUpdater()
+    internal static Process LaunchUpdater(string tag)
     {
         Program.RequireSingleFileUpdate();
-        return StartWorker(ServiceLifetime.ApplicationExecutable(), Environment.ProcessId, Process.Start);
+        return StartWorker(ServiceLifetime.ApplicationExecutable(), Environment.ProcessId, tag, Process.Start);
     }
 
-    internal static Process StartWorker(string executable, int servicePid, Func<ProcessStartInfo, Process?> start)
+    internal static Process StartWorker(string executable, int servicePid, string tag, Func<ProcessStartInfo, Process?> start)
     {
-        var info = new ProcessStartInfo(executable, [UpdateWorker, servicePid.ToString(CultureInfo.InvariantCulture)]) { CreateNoWindow = true };
+        var info = new ProcessStartInfo(executable, [UpdateWorker, servicePid.ToString(CultureInfo.InvariantCulture), tag]) { CreateNoWindow = true };
         return start(info) ?? throw new InvalidOperationException("Could not start the update helper.");
     }
 

@@ -12,7 +12,7 @@ internal sealed record TunnelSummary(string Tunnel, ulong? HostConnections, ulon
         ? "No tunnels found. Run 'create' to create one."
         : TextTable.Format(Header, tunnels.OrderBy(t => t.Tunnel, StringComparer.Ordinal).Select(t => t.Cells()));
 
-    private string[] Cells() =>
+    internal string[] Cells() =>
     [
         Tunnel,
         CountCell(HostConnections),

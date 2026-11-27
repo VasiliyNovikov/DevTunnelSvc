@@ -12,35 +12,36 @@ internal sealed class TrayUpdateUI(HttpClient http, Func<UpdateInstallation> ins
     private const string Caption = "DevTunnelSvc Update";
     private const int ErrorDisplayedExitCode = 3;
 
-    public static async Task<int> FromTrayAsync(int servicePid, string? expectedTag, CancellationToken ct)
+    public static async Task<int> FromTrayAsync(int servicePid, string? selectedTag, string? workerTag, CancellationToken ct)
     {
         using var client = GitHubOAuth.CreateClient();
-        return await new TrayUpdateUI(client, Program.GetUpdateInstallation, TrayWindowHost.Prompt).RunAsync(servicePid, expectedTag, ct);
+        return await new TrayUpdateUI(client, Program.GetUpdateInstallation, TrayWindowHost.Prompt).RunAsync(servicePid, selectedTag, workerTag, ct);
     }
 
-    internal async Task<int> RunAsync(int servicePid, string? expectedTag, CancellationToken ct)
+    internal async Task<int> RunAsync(int servicePid, string? selectedTag, string? workerTag, CancellationToken ct)
     {
         try
         {
-            return expectedTag is null ? await RunFromMenuAsync(servicePid, ct) : await RunFromCopyAsync(servicePid, expectedTag, ct);
+            return workerTag is null ? await RunFromMenuAsync(servicePid, selectedTag, ct) : await RunFromCopyAsync(servicePid, workerTag, ct);
         }
-        catch (Exception ex) { ReportError(AppLog.Detail(ex)); return expectedTag is null ? 1 : ErrorDisplayedExitCode; }
+        catch (Exception ex) { ReportError(AppLog.Detail(ex)); return workerTag is null ? 1 : ErrorDisplayedExitCode; }
     }
 
     private void Inform(string text) => prompt(new(Caption, text), null);
     private void ReportError(string text) => prompt(new("DevTunnelSvc Update Error", text, Scrollable: true), null);
 
-    private async Task<int> RunFromMenuAsync(int servicePid, CancellationToken ct)
+    private async Task<int> RunFromMenuAsync(int servicePid, string? selectedTag, CancellationToken ct)
     {
         using var service = SafeProcessHandle.Open(servicePid); // Pin this instance through confirmation and installation.
-        var release = await new ReleaseUpdate(http).FindNewerAsync(Program.Version, ct);
-        if (release is null) { Inform(ReleaseUpdate.UpToDate(Program.Version)); return 0; }
+        // A current tray already checked before launching us; the private copy rechecks this exact tag before asking.
+        var tag = selectedTag ?? (await new ReleaseUpdate(http).FindNewerAsync(Program.Version, ct))?.TagName;
+        if (tag is null || !ReleaseUpdate.IsNewer(Program.Version, tag)) { Inform(ReleaseUpdate.UpToDate(Program.Version)); return 0; }
         var target = installation();
         var log = new AppLog(target.Directory, "update", Console.Error.WriteLine);
-        log.Write($"Updating {Program.Version} to {release.TagName}.");
+        log.Write($"Updating {Program.Version} to {tag}.");
         // After replacement this process can't lazy-load WinForms from its original bundle.
         var result = await UpdateWorker.RunAsync(target.Image, [TrayMenu.UpdateWorker, servicePid.ToString(CultureInfo.InvariantCulture)],
-            release.TagName, log, ErrorDisplayedExitCode, ct);
+            tag, log, ErrorDisplayedExitCode, ct);
         return result.ExitCode == 0 ? 0 : 1;
     }
 

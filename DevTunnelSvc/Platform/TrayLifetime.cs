@@ -1,19 +1,24 @@
+using DevTunnelSvc.Tunnels;
+using DevTunnelSvc.Updates;
+
 namespace DevTunnelSvc.Platform;
+
+internal sealed record TrayQueries(Func<bool> AutoUpdateEnabled, ReleaseDiscovery Releases, Func<CancellationToken, Task<IReadOnlyList<TunnelSummary>>> ListTunnels);
 
 internal sealed class TrayLifetime : IDisposable
 {
     private readonly TaskCompletionSource<Exception?> stopped = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private readonly IDisposable? tray;
 
-    internal delegate IDisposable Factory(string pipeName, Action<string> writeEvent, Func<bool> autoUpdateEnabled, Action<Exception?> stopped);
+    internal delegate IDisposable Factory(string pipeName, Action<string> writeEvent, TrayQueries queries, Action<Exception?> stopped);
 #if WINDOWS
-    internal static Factory ForCurrentPlatform => static (pipe, log, enabled, stopped) => new TrayIcon(pipe, log, enabled, stopped);
+    internal static Factory ForCurrentPlatform => static (pipe, log, queries, stopped) => new TrayIcon(pipe, log, queries, stopped);
 #else
     internal static Factory? ForCurrentPlatform => null;
 #endif
 
-    internal TrayLifetime(string pipeName, Action<string> writeEvent, Func<bool> autoUpdateEnabled, Factory? create) =>
-        tray = create?.Invoke(pipeName, writeEvent, autoUpdateEnabled, e => stopped.TrySetResult(e));
+    internal TrayLifetime(string pipeName, Action<string> writeEvent, TrayQueries queries, Factory? create) =>
+        tray = create?.Invoke(pipeName, writeEvent, queries, e => stopped.TrySetResult(e));
 
     internal async Task WaitAsync(Task server, CancellationTokenSource lifetime)
     {

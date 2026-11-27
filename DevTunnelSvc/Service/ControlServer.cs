@@ -1,24 +1,11 @@
 using System.IO.Pipes;
 using System.Text.Json;
-using DevTunnelSvc.Auth;
-using DevTunnelSvc.Tunnels;
 using DevTunnelSvc.Updates;
 
 namespace DevTunnelSvc.Service;
 
 internal static class ControlServer
 {
-    internal static async Task RunAsync(string name, string stateDirectory, TextWriter log, Action<string> writeEvent, AutoUpdates updates, CancellationToken ct)
-    {
-        using var http = GitHubOAuth.CreateClient();
-        http.Timeout = TimeSpan.FromSeconds(20);
-        using var credential = new SessionCredential(new CredentialFile(stateDirectory),
-            (token, tokenCt) => GitHubOAuth.RefreshAsync(http, token, tokenCt), TimeProvider.System);
-        await using var backend = new TunnelBackend(() => credential.RequireTokenAsync(ct), writeEvent: writeEvent);
-        await using var service = new TunnelService(backend, credential, new MappingFile(stateDirectory), writeEvent);
-        await RunAsync(name, (request, token) => updates.DispatchAsync(request, service.ExecuteAsync, token), log, writeEvent, ct);
-    }
-
     public static async Task RunAsync(string name, Func<Request, CancellationToken, Task<string>> execute, TextWriter log, Action<string> writeEvent, CancellationToken ct)
     {
         using var pipe = new NamedPipeServerStream(name, PipeDirection.InOut, 1, PipeTransmissionMode.Byte,

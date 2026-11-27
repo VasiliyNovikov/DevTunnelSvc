@@ -37,8 +37,14 @@ UpdateInstallation Installation()
 }
 if (args is [TrayMenu.UpdateWorker, var servicePid, ..])
 {
-    var tag = args switch { [_, _] => null, [_, _, UpdateWorker.TagOption, var value] => value, _ => throw new ArgumentException("Invalid tray worker arguments.") };
-    return await new TrayUpdateUI(http, Installation, InspectDialog).RunAsync(int.Parse(servicePid, CultureInfo.InvariantCulture), tag, limit.Token);
+    (string? Selected, string? Worker) versions = args switch
+    {
+        [_, _] => (null, null),
+        [_, _, var version] => (version, null),
+        [_, _, UpdateWorker.TagOption, var tag] => (null, tag),
+        _ => throw new ArgumentException("Invalid tray worker arguments.")
+    };
+    return await new TrayUpdateUI(http, Installation, InspectDialog).RunAsync(int.Parse(servicePid, CultureInfo.InvariantCulture), versions.Selected, versions.Worker, limit.Token);
 }
 var update = new CliUpdate(http, DevTunnelSvc.Program.Version, Installation);
 var actions = new LocalActions((_, _, _) => throw new NotSupportedException(), update.RunAsync,
@@ -63,7 +69,7 @@ async Task RunService(TextWriter log, CancellationToken ct)
     var background = new AutoUpdateActions(DevTunnelSvc.Program.RequireSingleFileUpdate,
         t => new ReleaseUpdate(http).FindNewerAsync(DevTunnelSvc.Program.Version, t), (pid, t) => AutoUpdateLauncher.LaunchAsync(image, pid, t), Task.Delay);
     await ServiceLifetime.RunAsync(log, pipe, state, background, lifetime.Token,
-        static (name, writeEvent, enabled, stopped) => new TrayIcon(name, writeEvent, enabled, stopped, _ => { }));
+        static (name, writeEvent, queries, stopped) => new TrayIcon(name, writeEvent, queries, stopped, _ => { }));
 }
 
 internal sealed class OfflineRelease(string state) : HttpMessageHandler

@@ -82,9 +82,9 @@ internal sealed class ReleaseUpdate(HttpClient http, UpdateHandoff? force = null
         return windows ? $"devtunnelsvc-win-{arch}.zip" : $"devtunnelsvc-linux-{arch}";
     }
 
-    internal static bool IsNewer(string current, string tag)
+    internal static bool IsNewer(string current, string? tag)
     {
-        if (!tag.StartsWith('v') || !Version.TryParse(tag[1..], out var latest) || latest.Build < 0 ||
+        if (tag is null || !tag.StartsWith('v') || !Version.TryParse(tag[1..], out var latest) || latest.Build < 0 ||
             latest.Revision >= 0 || latest.ToString() != tag[1..])
             throw new InvalidDataException("GitHub did not return a stable vMAJOR.MINOR.PATCH release.");
         var parts = current.Split('-', 2);

@@ -61,11 +61,13 @@ internal sealed class Commands(TextReader input, TextWriter output, TextWriter e
     private static Command TrayUpdateCommand()
     {
         var pid = new Argument<int>("service-pid");
+        var selected = new Argument<string?>("selected-version") { Arity = ArgumentArity.ZeroOrOne };
         var command = new Command(TrayMenu.UpdateWorker) { Hidden = true };
         var tag = new Option<string?>(UpdateWorker.TagOption) { Hidden = true };
         command.Arguments.Add(pid);
+        command.Arguments.Add(selected);
         command.Options.Add(tag);
-        command.SetAction((r, ct) => TrayUpdateUI.FromTrayAsync(r.GetRequiredValue(pid), r.GetValue(tag), ct));
+        command.SetAction((r, ct) => TrayUpdateUI.FromTrayAsync(r.GetRequiredValue(pid), r.GetValue(selected), r.GetValue(tag), ct));
         return command;
     }
 #endif

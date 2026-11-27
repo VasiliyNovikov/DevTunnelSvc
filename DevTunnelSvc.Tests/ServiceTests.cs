@@ -58,6 +58,10 @@ public sealed class ServiceTests : IDisposable
             Assert.Contains("localhost:5000 -> blue-tunnel.use2:8080", status);
             Assert.Contains("blue-tunnel.use2:8080 -> localhost:3000", status);
             Assert.DoesNotContain("test-credential", status);
+            var details = JsonSerializer.Deserialize(await Send(new(LocalStatus.Command), limit.Token), StatusJson.Default.LocalStatus)!;
+            Assert.IsTrue(details.SignedIn);
+            CollectionAssert.AreEquivalent(new LocalMappingStatus[] { new(true, "blue-tunnel.use2", 8080, 3000, "Connected"),
+                new(false, "blue-tunnel.use2", 8080, 5000, "Connected") }, details.Mappings);
             Assert.Contains("Stop", (await Assert.ThrowsExactlyAsync<InvalidOperationException>(() => Send(new("delete", "blue-tunnel.use2"), limit.Token))).Message);
             Assert.AreEqual(0, await Cli.RunAsync(["stop", "host:blue-tunnel.use2"], output, error, Send));
             Assert.IsTrue(backend.Sessions[0].Disposed);

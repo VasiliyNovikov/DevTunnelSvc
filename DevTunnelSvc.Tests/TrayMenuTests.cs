@@ -1,7 +1,9 @@
 using System.Diagnostics;
 using System.IO.Pipes;
+using System.Text.Json;
 using DevTunnelSvc.Platform;
 using DevTunnelSvc.Service;
+using DevTunnelSvc.Tunnels;
 using DevTunnelSvc.Updates;
 
 namespace DevTunnelSvc.Tests;
@@ -9,6 +11,14 @@ namespace DevTunnelSvc.Tests;
 [TestClass]
 public sealed class TrayMenuTests
 {
+    internal static readonly TrayQueries NoQueries = new(() => false, new(_ => throw new AssertFailedException("Unexpected release check.")),
+        _ => throw new AssertFailedException("Unexpected tunnel list."));
+
+    private static TrayMenu Menu(string pipe, Action exit, Action<TrayDialogContent> show, Action<string> log, TrayQueries? queries = null,
+        Func<LocalStatus, TrayStatusTarget>? open = null, Func<string, Process>? launch = null) =>
+        new(pipe, exit, queries ?? NoQueries, launch ?? (_ => throw new AssertFailedException("Unexpected updater.")),
+            open ?? (_ => throw new AssertFailedException("Unexpected Status window.")), show, log);
+
     [TestMethod]
     public async Task StatusProbeDiscardsLargeOutputAndReturnsTheInstalledClisExitCode()
     {
@@ -28,7 +38,7 @@ public sealed class TrayMenuTests
         List<TrayDialogContent> dialogs = [];
         List<string> events = [];
         var exits = 0;
-        using var menu = new TrayMenu("unused", () => exits++, () => throw new AssertFailedException(), dialogs.Add, events.Add);
+        using var menu = Menu("unused", () => exits++, dialogs.Add, events.Add);
         await menu.SelectAsync(TrayMenu.Command.About, CancellationToken.None);
         var about = dialogs.Single();
         Assert.AreEqual("About DevTunnelSvc", about.Title);
@@ -50,7 +60,7 @@ public sealed class TrayMenuTests
         var server = ServiceLifetime.RunAsync(TextWriter.Null, pipe, state.FullName, actions, limit.Token);
         try
         {
-            using var menu = new TrayMenu(pipe, () => Assert.Fail(), () => throw new AssertFailedException(), _ => Assert.Fail(), _ => { });
+            using var menu = Menu(pipe, () => Assert.Fail(), _ => Assert.Fail(), _ => { });
             Task<string> Status() => Control.SendAsync(new(AutoUpdateConsent.Status), pipe, limit.Token);
             foreach (var accept in new[] { false, true })
             {
@@ -75,38 +85,119 @@ public sealed class TrayMenuTests
     {
         var pipe = $"devtunnel-tray-{Guid.NewGuid():N}";
         List<TrayDialogContent> dialogs = [];
-        using var menu = new TrayMenu(pipe, () => Assert.Fail(), () => throw new AssertFailedException(), dialogs.Add, _ => { });
+        List<LocalStatus> local = [];
+        List<string> cloud = [];
+        var tunnel = new TunnelSummary("blue.use2", null, 2, null, [8080]);
+        var offline = false;
+        var queries = NoQueries with { ListTunnels = _ => offline ? throw new IOException("offline") : Task.FromResult<IReadOnlyList<TunnelSummary>>([tunnel]) };
+        using var menu = Menu(pipe, () => Assert.Fail(), dialogs.Add, _ => { }, queries, report =>
+        {
+            local.Add(report);
+            return new((rows, error) => cloud.Add(error ?? rows.Single().Tunnel), CancellationToken.None);
+        });
         using var server = new NamedPipeServerStream(pipe, PipeDirection.InOut, 1, PipeTransmissionMode.Byte, Control.Options);
         using var limit = new CancellationTokenSource(TimeSpan.FromSeconds(10));
-        const string signedOut = "Service running; signed out.";
-        const string connected = "Service running; signed in.\r\nhost:demo.use2  Connected  demo.use2:8080 -> localhost:3000";
-        foreach (var reply in new Reply[] { new(true, signedOut), new(false, "Cannot read status."), new(true, connected) })
+        var signedOut = JsonSerializer.Serialize(new LocalStatus(false, []), StatusJson.Default.LocalStatus);
+        var active = new LocalMappingStatus(true, "blue.use2", 8080, 3000, "Connected");
+        var signedIn = JsonSerializer.Serialize(new LocalStatus(true, [active]), StatusJson.Default.LocalStatus);
+        foreach (var reply in new Reply[] { new(true, signedOut), new(false, "Cannot read status."), new(true, signedIn), new(true, signedIn) })
         {
+            offline = cloud.Count != 0;
             var selection = menu.SelectAsync(TrayMenu.Command.Status, limit.Token);
             await server.WaitForConnectionAsync(limit.Token);
             Assert.AreSame(selection, menu.SelectAsync(TrayMenu.Command.Status, limit.Token), "A second Status click must not send another query.");
-            Assert.AreEqual(new Request("status"), await Control.ReadAsync(server, ControlJson.Default.Request, limit.Token));
+            Assert.AreEqual(new Request(LocalStatus.Command), await Control.ReadAsync(server, ControlJson.Default.Request, limit.Token));
             await Control.WriteAsync(server, reply, ControlJson.Default.Reply, limit.Token);
             await selection.WaitAsync(limit.Token);
             server.Disconnect();
         }
-        CollectionAssert.AreEqual(new TrayDialogContent[] { new("DevTunnelSvc Status", signedOut, true), new("DevTunnelSvc", "Cannot read status.", true),
-            new("DevTunnelSvc Status", connected, true) }, dialogs);
+        Assert.AreEqual(new TrayDialogContent("DevTunnelSvc", "Cannot read status.", true), dialogs.Single());
+        Assert.IsFalse(local[0].SignedIn);
+        Assert.IsTrue(local[2].SignedIn);
+        Assert.AreEqual(active, local[2].Mappings.Single());
+        Assert.AreEqual("blue.use2|Could not list tunnels: offline", string.Join('|', cloud));
     }
 
     [TestMethod]
-    public async Task UpdateOnlyLaunchesOneWorkerAndMenuErrorsDoNotExitTheService()
+    [DataRow(true)]
+    [DataRow(false)]
+    public async Task ClosingStatusOrExitingTheTrayCancelsCloudLookupWithoutUpdatingTheClosedView(bool closeWindow)
+    {
+        var pipe = $"devtunnel-tray-cloud-{Guid.NewGuid():N}";
+        using var limit = new CancellationTokenSource(TimeSpan.FromSeconds(8));
+        using var shutdown = CancellationTokenSource.CreateLinkedTokenSource(limit.Token);
+        using var closed = new CancellationTokenSource();
+        using var server = new NamedPipeServerStream(pipe, PipeDirection.InOut, 1, PipeTransmissionMode.Byte, Control.Options);
+        var reading = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var cancelled = false;
+        var queries = NoQueries with
+        {
+            ListTunnels = async ct =>
+        {
+            reading.SetResult();
+            try { await Task.Delay(Timeout.InfiniteTimeSpan, ct); }
+            finally { cancelled = ct.IsCancellationRequested; }
+            return [];
+        }
+        };
+        var opened = false;
+        List<TrayDialogContent> dialogs = [];
+        using var menu = Menu(pipe, shutdown.Cancel, dialogs.Add, _ => { }, queries, local =>
+        {
+            opened = local.SignedIn;
+            return new((_, _) => Assert.Fail("Updated a closed Status window."), closed.Token);
+        });
+        var pending = menu.SelectAsync(TrayMenu.Command.Status, shutdown.Token);
+        await server.WaitForConnectionAsync(limit.Token);
+        await Control.ReadAsync(server, ControlJson.Default.Request, limit.Token);
+        await Control.WriteAsync(server, new Reply(true, JsonSerializer.Serialize(new LocalStatus(true, []), StatusJson.Default.LocalStatus)), ControlJson.Default.Reply, limit.Token);
+        await reading.Task.WaitAsync(limit.Token);
+        Assert.IsTrue(opened, "Local status should be visible before the cloud returns.");
+        await menu.SelectAsync(TrayMenu.Command.About, shutdown.Token);
+        Assert.IsFalse(pending.IsCompleted);
+        if (closeWindow) await closed.CancelAsync();
+        else await menu.SelectAsync(TrayMenu.Command.Exit, shutdown.Token);
+        await pending.WaitAsync(limit.Token);
+        Assert.IsTrue(cancelled);
+        Assert.AreEqual("About DevTunnelSvc", dialogs.Single().Title);
+    }
+
+    [TestMethod]
+    public async Task UpdateChecksRetainTheDiscoveredVersionAndLaunchOnlyTheSelectedReleaseOnce()
     {
         List<TrayDialogContent> dialogs = [];
         var launches = 0;
-        using var menu = new TrayMenu("unused", () => Assert.Fail(), () =>
-            ++launches == 1 ? throw new InvalidOperationException("Cannot launch updater.") : Process.GetCurrentProcess(), dialogs.Add, _ => { });
-        await menu.SelectAsync(TrayMenu.Command.Update, CancellationToken.None);
-        Assert.AreEqual(new TrayDialogContent("DevTunnelSvc", "Cannot launch updater.", true), dialogs.Single());
+        var check = new TaskCompletionSource<ReleaseInfo?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var calls = 0;
+        var queries = NoQueries with { Releases = new(_ => { calls++; return check.Task; }) };
+        string? launched = null;
+        using var menu = Menu("unused", () => Assert.Fail(), dialogs.Add, _ => { }, queries, launch: version =>
+        {
+            launched = version;
+            return ++launches == 1 ? throw new InvalidOperationException("Cannot launch updater.") : Process.GetCurrentProcess();
+        });
+        var first = menu.SelectUpdateAsync(null, CancellationToken.None);
+        Assert.AreSame(first, menu.SelectUpdateAsync(null, CancellationToken.None));
+        check.SetResult(null);
+        await first;
+        Assert.AreEqual(1, calls);
+        Assert.Contains("Already up to date", dialogs.Single().Text);
+        Assert.IsNull(menu.AvailableTag);
+        check = new();
+        check.SetResult(new("v2.0.0", []));
+        await menu.SelectUpdateAsync(null, CancellationToken.None);
+        Assert.AreEqual(new TrayDialogContent("DevTunnelSvc", "Cannot launch updater.", true), dialogs[^1]);
+        Assert.AreEqual("v2.0.0", menu.AvailableTag);
         Assert.IsFalse(menu.Updating);
-        await menu.SelectAsync(TrayMenu.Command.Update, CancellationToken.None);
-        await menu.SelectAsync(TrayMenu.Command.Update, CancellationToken.None);
+        check = new();
+        check.SetResult(new("v3.0.0", []));
+        await menu.SelectUpdateAsync("v2.0.0", CancellationToken.None);
+        Assert.Contains("Update to v3.0.0", dialogs[^1].Text);
+        Assert.AreEqual(1, launches);
+        await menu.SelectUpdateAsync(menu.AvailableTag, CancellationToken.None);
+        await menu.SelectUpdateAsync(menu.AvailableTag, CancellationToken.None);
         Assert.IsTrue(menu.Updating);
+        Assert.AreEqual("v3.0.0", launched);
         Assert.AreEqual(2, launches);
     }
 
@@ -116,7 +207,7 @@ public sealed class TrayMenuTests
         var pipe = $"devtunnel-tray-{Guid.NewGuid():N}";
         using var shutdown = new CancellationTokenSource();
         List<TrayDialogContent> dialogs = [];
-        using var menu = new TrayMenu(pipe, shutdown.Cancel, () => throw new AssertFailedException(), dialogs.Add, _ => { });
+        using var menu = Menu(pipe, shutdown.Cancel, dialogs.Add, _ => { });
         using var server = new NamedPipeServerStream(pipe, PipeDirection.InOut, 1, PipeTransmissionMode.Byte, Control.Options);
         using var limit = new CancellationTokenSource(TimeSpan.FromSeconds(5));
         var selection = menu.SelectAsync(TrayMenu.Command.Status, shutdown.Token);
@@ -135,16 +226,16 @@ public sealed class TrayMenuTests
     public void UpdateWorkerIsTheSameExecutableWithTheOriginalServicePidAndNoConsole()
     {
         const string exe = @"C:\Apps with spaces\devtunnelsvc.exe";
-        using var process = TrayMenu.StartWorker(exe, 123, info =>
+        using var process = TrayMenu.StartWorker(exe, 123, "v2.0.0", info =>
         {
             Assert.AreEqual(exe, info.FileName);
-            Assert.AreEqual("__tray-update,123", string.Join(',', info.ArgumentList));
+            Assert.AreEqual("__tray-update,123,v2.0.0", string.Join(',', info.ArgumentList));
             Assert.IsTrue(info.CreateNoWindow);
             Assert.IsFalse(info.UseShellExecute);
             return Process.GetCurrentProcess();
         });
         Assert.AreEqual(Environment.ProcessId, process.Id);
-        Assert.Contains("start the update helper", Assert.ThrowsExactly<InvalidOperationException>(() => TrayMenu.StartWorker(exe, 123, _ => null)).Message);
+        Assert.Contains("start the update helper", Assert.ThrowsExactly<InvalidOperationException>(() => TrayMenu.StartWorker(exe, 123, "v2.0.0", _ => null)).Message);
     }
 
     [TestMethod]

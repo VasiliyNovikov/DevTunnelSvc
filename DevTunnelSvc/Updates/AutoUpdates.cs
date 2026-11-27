@@ -18,11 +18,13 @@ internal sealed class AutoUpdates : IAsyncDisposable
     private CancellationTokenSource? polling;
     private Task monitor = Task.CompletedTask;
     internal bool Enabled => Volatile.Read(ref polling) is not null;
+    internal ReleaseDiscovery Releases { get; }
 
     internal AutoUpdates(string directory, AutoUpdateActions actions, Action<string> log, CancellationToken lifetime)
     {
         file = new(directory);
         this.actions = actions;
+        Releases = new(actions.FindNewer);
         this.log = log;
         this.lifetime = lifetime;
         try
@@ -103,7 +105,7 @@ internal sealed class AutoUpdates : IAsyncDisposable
         limit.CancelAfter(TimeSpan.FromSeconds(30));
         try
         {
-            if (await actions.FindNewer(limit.Token) is { } release) await LaunchAsync(release, limit.Token);
+            if (await Releases.CheckAsync(limit.Token) is { } tag) await LaunchAsync(tag, limit.Token);
         }
         catch (Exception ex)
         {
@@ -112,14 +114,14 @@ internal sealed class AutoUpdates : IAsyncDisposable
         }
     }
 
-    private Task LaunchAsync(ReleaseInfo release, CancellationToken ct)
+    private Task LaunchAsync(string tag, CancellationToken ct)
     {
         lock (launchGate)
         {
             if (!Enabled) return Task.CompletedTask;
             ct.ThrowIfCancellationRequested();
             actions.RequireSupported();
-            log($"Auto-update found {release.TagName}; launching updater.");
+            log($"Auto-update found {tag}; launching updater.");
             return actions.Launch(Environment.ProcessId, ct);
         }
     }

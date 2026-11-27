@@ -4,6 +4,8 @@ using System.IO.Pipes;
 using System.Runtime.InteropServices;
 using System.Windows.Forms;
 using DevTunnelSvc.Platform;
+using DevTunnelSvc.Service;
+using DevTunnelSvc.Tunnels;
 using ControlPipe = DevTunnelSvc.Service.Control;
 
 namespace DevTunnelSvc.Tests;
@@ -18,13 +20,13 @@ public sealed class WinFormsTrayTests
         {
             var stopped = new TaskCompletionSource<Exception?>(TaskCreationOptions.RunContinuationsAsynchronously);
             var disposedOnOwner = false;
-            using (var tray = new TrayIcon("unused", _ => { }, () => false, e => stopped.SetResult(e), icon =>
+            using (var tray = new TrayIcon("unused", _ => { }, TrayMenuTests.NoQueries, e => stopped.SetResult(e), icon =>
             {
                 var owner = Environment.CurrentManagedThreadId;
                 Assert.AreEqual(ApartmentState.STA, Thread.CurrentThread.GetApartmentState());
                 Assert.IsNotNull(icon.Icon);
                 var popup = icon.ContextMenuStrip!;
-                Assert.AreEqual("&Status,&Update,Auto-up&date,&About,,E&xit", string.Join(',', popup.Items.Cast<ToolStripItem>().Select(item => item.Text)));
+                Assert.AreEqual("&Status,Check for &updates,Auto-up&date,&About,,E&xit", string.Join(',', popup.Items.Cast<ToolStripItem>().Select(item => item.Text)));
                 icon.Disposed += (_, _) => disposedOnOwner = Environment.CurrentManagedThreadId == owner;
                 if (clickExit) SynchronizationContext.Current!.Post(_ => popup.Items[5].PerformClick(), null);
             }))
@@ -41,9 +43,9 @@ public sealed class WinFormsTrayTests
     {
         var failure = new IOException("Explorer unavailable");
         Assert.AreSame(failure, Assert.ThrowsExactly<IOException>(() =>
-            new TrayIcon("unused", _ => { }, () => false, _ => Assert.Fail(), _ => throw failure)));
+            new TrayIcon("unused", _ => { }, TrayMenuTests.NoQueries, _ => Assert.Fail(), _ => throw failure)));
         var stopped = new TaskCompletionSource<Exception?>(TaskCreationOptions.RunContinuationsAsynchronously);
-        using var tray = new TrayIcon("unused", _ => { }, () => false, e => stopped.SetResult(e),
+        using var tray = new TrayIcon("unused", _ => { }, TrayMenuTests.NoQueries, e => stopped.SetResult(e),
             _ => SynchronizationContext.Current!.Post(_ => throw failure, null));
         Assert.AreSame(failure, await stopped.Task.WaitAsync(TimeSpan.FromSeconds(5)));
     }
@@ -58,7 +60,7 @@ public sealed class WinFormsTrayTests
         using var limit = new CancellationTokenSource(TimeSpan.FromSeconds(5));
         var stopped = new TaskCompletionSource<Exception?>(TaskCreationOptions.RunContinuationsAsynchronously);
         var ui = new TaskCompletionSource<(SynchronizationContext Thread, ContextMenuStrip Menu)>(TaskCreationOptions.RunContinuationsAsynchronously);
-        using (var tray = new TrayIcon(pipe, _ => { }, () => false, e => stopped.SetResult(e), icon =>
+        using (var tray = new TrayIcon(pipe, _ => { }, TrayMenuTests.NoQueries, e => stopped.SetResult(e), icon =>
         {
             var popup = icon.ContextMenuStrip!;
             var thread = SynchronizationContext.Current!;
@@ -67,7 +69,7 @@ public sealed class WinFormsTrayTests
         }))
         {
             await server.WaitForConnectionAsync(limit.Token);
-            Assert.AreEqual("status", (await ControlPipe.ReadAsync(server, Service.ControlJson.Default.Request, limit.Token)).Command);
+            Assert.AreEqual(LocalStatus.Command, (await ControlPipe.ReadAsync(server, Service.ControlJson.Default.Request, limit.Token)).Command);
             var (thread, popup) = await ui.Task.WaitAsync(limit.Token);
             var canUseMenu = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
             thread.Post(_ =>
@@ -106,32 +108,63 @@ public sealed class WinFormsTrayTests
     }
 
     [STATestMethod]
-    public void ReselectingStatusRefreshesOneOwnedWindowAndTheMenuRemainsAvailable()
+    public void StatusRefreshesBothListsInOneOwnedWindowAndPreservesPortDirection()
     {
         using var icon = TrayDialog.LoadArtwork(16);
-        TrayDialog status;
+        TrayStatusDialog status;
         using (var owner = TrayWindowHost.CreateOwner())
         {
-            var initial = new TrayDialogContent("DevTunnelSvc Status", "First report", true);
-            status = TrayDialog.GetOrCreate(owner, icon, initial);
-            Assert.AreSame(status, TrayDialog.GetOrCreate(owner, icon, initial with { Text = "Next report" }));
-            Assert.AreEqual("Next report", ((TableLayoutPanel)status.Controls[0]).Controls.OfType<RichTextBox>().Single().Text);
-            using var actions = new TrayMenu("unused", () => { }, () => throw new AssertFailedException(), content => TrayDialog.GetOrCreate(owner, icon, content), _ => { });
-            var autoUpdate = false;
-            using var menu = TrayIcon.CreatePopup(actions, () => autoUpdate, _ => throw new AssertFailedException(), CancellationToken.None);
-            var opened = false;
-            menu.Opening += (_, e) => { opened = !e.Cancel && menu.Items[0].Enabled; e.Cancel = true; };
-            menu.Show(Point.Empty);
-            Assert.IsTrue(opened);
-            Assert.IsFalse(((ToolStripMenuItem)menu.Items[2]).Checked);
-            autoUpdate = true; // A CLI enable while the popup is closed.
-            menu.Show(Point.Empty);
-            Assert.IsTrue(((ToolStripMenuItem)menu.Items[2]).Checked);
-            menu.Items[3].PerformClick();
-            Assert.HasCount(2, owner.OwnedForms);
-            Assert.IsTrue(owner.OwnedForms.Any(form => form.Text == "About DevTunnelSvc"));
+            status = TrayStatusDialog.GetOrCreate(owner, icon, new(true, [new(true, "blue.use2", 8080, 3000, "Connected"), new(false, "blue.use2", 8080, 5000, "Restoring")]));
+            status.SetTunnels([new("zulu.euw", null, 2, null, [8080, 80]), new("alpha.use2", 1, null, null, [])], null);
+            var layout = (TableLayoutPanel)status.Controls[0];
+            var lists = layout.Controls.OfType<ListView>().ToArray();
+            Assert.HasCount(2, lists);
+            Assert.IsTrue(lists.All(list => list.View == System.Windows.Forms.View.Details));
+            static string Cells(ListViewItem row) => string.Join('|', row.SubItems.Cast<ListViewItem.ListViewSubItem>().Select(cell => cell.Text));
+            Assert.AreEqual("alpha.use2|1|-|-|-", Cells(lists[0].Items[0]));
+            Assert.AreEqual("zulu.euw|-|2|-|80,8080", Cells(lists[0].Items[1]));
+            Assert.AreEqual("Host|blue.use2|8080|localhost:3000|-|Connected", Cells(lists[1].Items[0]));
+            Assert.AreEqual("Client|blue.use2|8080|-|localhost:5000|Restoring", Cells(lists[1].Items[1]));
+            status.SetTunnels([], "Network unavailable");
+            Assert.HasCount(2, lists[1].Items);
+            Assert.Contains("Network unavailable", layout.GetControlFromPosition(0, 1)!.Text);
+            Assert.AreSame(status, TrayStatusDialog.GetOrCreate(owner, icon, new(false, [])));
+            Assert.IsTrue(lists.All(list => list.Items.Count == 0));
+            Assert.Contains("signed out", layout.GetControlFromPosition(0, 0)!.Text);
+            Assert.Contains("sign in", layout.GetControlFromPosition(0, 1)!.Text);
         }
         Assert.IsTrue(status.IsDisposed);
+    }
+
+    [STATestMethod]
+    public void OpeningMenuReflectsDiscoveredVersionsAndOptInWithoutCheckingTheNetwork()
+    {
+        using var icon = TrayDialog.LoadArtwork(16);
+        using var owner = TrayWindowHost.CreateOwner();
+        var autoUpdate = false;
+        Updates.ReleaseInfo? found = new("v2.0.0", []);
+        var checks = 0;
+        var queries = TrayMenuTests.NoQueries with { AutoUpdateEnabled = () => autoUpdate, Releases = new(_ => { checks++; return Task.FromResult<Updates.ReleaseInfo?>(found); }) };
+        using var actions = new TrayMenu("unused", () => { }, queries, _ => throw new AssertFailedException(), _ => throw new AssertFailedException(),
+            content => TrayDialog.GetOrCreate(owner, icon, content), _ => { });
+        using var menu = TrayIcon.CreatePopup(actions, _ => throw new AssertFailedException(), CancellationToken.None);
+        menu.Opening += (_, e) => { Assert.IsFalse(e.Cancel); e.Cancel = true; };
+        menu.Show(Point.Empty);
+        Assert.AreEqual("Check for &updates", menu.Items[1].Text);
+        Assert.IsFalse(((ToolStripMenuItem)menu.Items[2]).Checked);
+        Assert.AreEqual(0, checks);
+        autoUpdate = true;
+        queries.Releases.CheckAsync(CancellationToken.None).GetAwaiter().GetResult();
+        menu.Show(Point.Empty);
+        Assert.AreEqual("&Update to v2.0.0", menu.Items[1].Text);
+        Assert.IsTrue(((ToolStripMenuItem)menu.Items[2]).Checked);
+        Assert.AreEqual(1, checks);
+        found = null;
+        queries.Releases.CheckAsync(CancellationToken.None).GetAwaiter().GetResult();
+        menu.Show(Point.Empty);
+        Assert.AreEqual("Check for &updates", menu.Items[1].Text);
+        menu.Items[3].PerformClick();
+        Assert.AreEqual("About DevTunnelSvc", owner.OwnedForms.Single().Text);
     }
 
     [DllImport("dwmapi.dll", ExactSpelling = true)]

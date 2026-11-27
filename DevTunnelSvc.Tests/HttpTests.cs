@@ -625,11 +625,12 @@ public sealed class HttpTests
     }
 
     [TestMethod]
+    [DataRow(null)]
     [DataRow("latest")]
     [DataRow("v1.2")]
     [DataRow("v1.2.3.4")]
     [DataRow("v01.2.3")]
-    public void NoncanonicalTagsCannotSelectDownloadUrls(string tag)
+    public void NoncanonicalTagsCannotSelectDownloadUrls(string? tag)
     {
         Assert.ThrowsExactly<InvalidDataException>(() => ReleaseUpdate.IsNewer("1.0.0", tag));
     }

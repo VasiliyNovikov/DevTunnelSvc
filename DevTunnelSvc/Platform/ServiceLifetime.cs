@@ -27,9 +27,7 @@ internal static class ServiceLifetime
             using var lifetime = CancellationTokenSource.CreateLinkedTokenSource(ct);
             using var term = OperatingSystem.IsLinux() ? PosixSignalRegistration.Create(PosixSignal.SIGTERM,
                 signal => { signal.Cancel = true; lifetime.Cancel(); }) : null;
-            await using var updates = new AutoUpdates(stateDirectory, backgroundUpdates, events.Write, lifetime.Token);
-            using var tray = new TrayLifetime(name, events.Write, () => updates.Enabled, createTray);
-            await tray.WaitAsync(ControlServer.RunAsync(name, stateDirectory, log, events.Write, updates, lifetime.Token), lifetime);
+            await ServiceHost.RunAsync(name, stateDirectory, log, events.Write, backgroundUpdates, createTray, lifetime);
         }
         catch (Exception ex) { events.Write($"Service failed: {AppLog.ErrorCode(ex)}"); throw; }
         events.Write("Service stopped.");

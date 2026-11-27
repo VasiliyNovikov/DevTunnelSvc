@@ -22,6 +22,25 @@ public sealed class AutoUpdateTests : IDisposable
         (_, _) => throw new AssertFailedException("Unexpected tunnel command."), limit.Token);
 
     [TestMethod]
+    public async Task OverlappingChecksCannotRepublishAnOlderReleaseAndFailedChecksDoNotEraseAKnownUpdate()
+    {
+        var first = new TaskCompletionSource<ReleaseInfo?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var next = first.Task;
+        var releases = new ReleaseDiscovery(_ => next);
+        var older = releases.CheckAsync(limit.Token);
+        next = Task.FromResult<ReleaseInfo?>(NewRelease);
+        Assert.AreEqual(NewRelease.TagName, await releases.CheckAsync(limit.Token));
+        first.SetResult(null);
+        Assert.AreEqual(NewRelease.TagName, await older);
+        next = Task.FromException<ReleaseInfo?>(new HttpRequestException("offline"));
+        await Assert.ThrowsExactlyAsync<HttpRequestException>(() => releases.CheckAsync(limit.Token));
+        Assert.AreEqual(NewRelease.TagName, releases.AvailableTag);
+        next = Task.FromResult<ReleaseInfo?>(null);
+        Assert.IsNull(await releases.CheckAsync(limit.Token));
+        Assert.IsNull(releases.AvailableTag);
+    }
+
+    [TestMethod]
     public async Task OptInChecksImmediatelyAndEveryFiveMinutesAcrossCurrentOfflineAndNewReleases()
     {
         var idle = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -46,6 +65,7 @@ public sealed class AutoUpdateTests : IDisposable
         Assert.AreEqual(0, polls);
         Assert.AreEqual(AutoUpdateConsent.Enabled, await Send(updates, AutoUpdateConsent.Enable));
         await idle.Task.WaitAsync(limit.Token);
+        Assert.AreEqual(NewRelease.TagName, updates.Releases.AvailableTag);
         Assert.AreEqual(AutoUpdateConsent.Enabled, await Send(updates, AutoUpdateConsent.Enable));
         Assert.AreEqual(AutoUpdateConsent.Disabled, await Send(updates, AutoUpdateConsent.Disable));
         Assert.AreEqual(3, polls);
