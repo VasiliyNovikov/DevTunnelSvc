@@ -3,6 +3,7 @@
 #:include Repository.cs
 using System.Diagnostics;
 using System.Text.Json;
+using System.Xml.Linq;
 
 var fixture = Directory.CreateTempSubdirectory("devtunnel-duplication-");
 try
@@ -10,11 +11,15 @@ try
     var eng = fixture.CreateSubdirectory("eng").FullName;
     foreach (var props in new[] { "Directory.Build.props", "Directory.Packages.props" })
         File.Copy(Path.Combine(Repository.Root, props), Path.Combine(fixture.FullName, props));
+    const int fixtureTokens = 27;
+    var baseline = XElement.Load(Path.Combine(Repository.Root, Repository.BaselineFile));
+    baseline.Descendants("minCloneTokens").Single().SetValue(fixtureTokens);
+    baseline.Save(Path.Combine(fixture.FullName, Repository.BaselineFile));
     foreach (var source in new[] { "duplication.cs", "Repository.cs" })
         File.Copy(Path.Combine(Repository.Root, "eng", source), Path.Combine(eng, source));
 
     const string imports = "using A.B.C.D.E.F.G.H.I.J.K.L.M;\n";
-    const string call = "Probe(1,2,3,4,5,6,7,8,9,10,11);"; // Exactly 25 tokens.
+    const string call = "Probe(1,2,3,4,5,6,7,8,9,10,11,12);"; // Exactly the fixture threshold.
     var product = fixture.CreateSubdirectory("DevTunnelSvc");
     File.WriteAllText(Path.Combine(product.FullName, "Original.cs"), imports + call);
     File.WriteAllText(Path.Combine(product.CreateSubdirectory("obj").FullName, "Generated.cs"), call);
@@ -24,13 +29,13 @@ try
     File.WriteAllText(script, call + "\n" + call);
 
     var clones = RunGate(1).EnumerateArray().ToArray();
-    if (clones is not [var clone] || clone.GetProperty("tokens").GetInt32() != 25)
-        throw new InvalidDataException("Expected one 25-token clone.");
+    if (clones is not [var clone] || clone.GetProperty("tokens").GetInt32() != fixtureTokens)
+        throw new InvalidDataException($"Expected one {fixtureTokens}-token clone.");
     var places = clone.GetProperty("copies").EnumerateArray().Select(c => $"{c.GetProperty("file")}:{c.GetProperty("startLine")}-{c.GetProperty("endLine")}");
     if (!places.Order(StringComparer.Ordinal).SequenceEqual(["DevTunnelSvc.Tests/Conditional.cs:3-4", "DevTunnelSvc/Original.cs:2-2", "eng/Example.cs:1-1", "eng/Example.cs:2-2"]))
         throw new InvalidDataException("The duplication report did not locate all four copies.");
 
-    File.WriteAllText(tests, imports + "Other" + call["Probe".Length..]); // Only the last 24 tokens match.
+    File.WriteAllText(tests, imports + "Other" + call["Probe".Length..]); // One token short of the fixture threshold.
     File.WriteAllText(script, new string(';', 30)); // Matching windows here overlap.
     if (RunGate(0).GetArrayLength() != 0) throw new InvalidDataException("Expected an empty report after removing the copies.");
 

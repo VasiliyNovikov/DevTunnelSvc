@@ -8,10 +8,10 @@ using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
 
-const int minCloneTokens = 25;
 var root = Repository.Root;
 var reportPath = Repository.ReportPath("duplication");
 File.Delete(reportPath);
+var minCloneTokens = Repository.Threshold("minCloneTokens");
 
 var parse = CSharpParseOptions.Default.WithLanguageVersion(LanguageVersion.Preview).WithPreprocessorSymbols("WINDOWS");
 var vocabulary = new Dictionary<string, int>(StringComparer.Ordinal);

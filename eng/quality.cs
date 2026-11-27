@@ -2,6 +2,7 @@
 #:property PublishAot=false
 #:include Repository.cs
 using System.Diagnostics;
+using System.Globalization;
 using System.Text.Json;
 using System.Xml.Linq;
 
@@ -25,6 +26,7 @@ static int Coverage(string root)
     var crap = Path.Combine(output, "crap.json");
     File.Delete(cobertura);
     File.Delete(crap);
+    var methodThreshold = Repository.Threshold("crapMethodThreshold").ToString(CultureInfo.InvariantCulture);
 
     var tests = Dotnet(root, "test", "DevTunnelSvc.slnx", "-c", "Release", "-p:CollectCoverage=true");
     if (tests != 0)
@@ -37,7 +39,7 @@ static int Coverage(string root)
 
     var result = Dotnet(root, "tool", "run", "dotnet-crap", "--", "analyze",
         Path.Combine("DevTunnelSvc", "DevTunnelSvc.csproj"), "--coverage", cobertura,
-        "--threshold", "25", "--output", crap);
+        "--threshold", methodThreshold, "--output", crap);
     if (result != 0)
         return result;
 
@@ -56,15 +58,26 @@ static int Mutation(string root)
     File.Delete(json);
     File.Delete(html);
 
+    var baselineValid = Repository.Threshold("validMutants");
+    var baselineDetected = Repository.Threshold("detectedMutants", baselineValid);
+    // Stryker accepts only whole percentages and requires high >= low >= break.
+    var percent = 100L * baselineDetected / baselineValid;
+    var floor = percent.ToString(CultureInfo.InvariantCulture);
+    var high = Math.Max(percent, Repository.Threshold("mutationReportHigh", 100)).ToString(CultureInfo.InvariantCulture);
     var tests = Dotnet(Path.Combine(root, "DevTunnelSvc.Tests"), "tool", "run", "dotnet-stryker", "--",
-        "--skip-version-check", "--output", output);
+        "--skip-version-check", "--output", output, "--break-at", floor, "--threshold-low", floor, "--threshold-high", high);
     if (tests != 0)
         return tests;
 
     if (new FileInfo(html).Length == 0)
         throw new InvalidDataException("Stryker produced an empty HTML report.");
+    return CheckMutationScore(json, baselineDetected, baselineValid);
+}
+
+static int CheckMutationScore(string json, int baselineDetected, int baselineValid)
+{
     using var report = JsonDocument.Parse(File.ReadAllBytes(json));
-    var totalKilled = 0;
+    int totalKilled = 0, detected = 0, valid = 0;
     foreach (var file in report.RootElement.GetProperty("files").EnumerateObject())
     {
         var statuses = file.Value.GetProperty("mutants").EnumerateArray()
@@ -72,13 +85,23 @@ static int Mutation(string root)
         if (statuses.Any(s => s is not ("Killed" or "Survived" or "NoCoverage" or "Timeout" or "Ignored" or "CompileError" or "RuntimeError")))
             throw new InvalidDataException($"Unrecognized mutant status in {file.Name}.");
         var killed = statuses.Count(s => s == "Killed");
-        if (killed == 0 && statuses.Any(s => s is "Survived" or "NoCoverage" or "Timeout"))
+        var found = killed + statuses.Count(s => s == "Timeout");
+        var fileValid = found + statuses.Count(s => s is "Survived" or "NoCoverage");
+        if (fileValid > 0 && killed == 0)
             throw new InvalidDataException($"No mutant was killed in {file.Name}.");
         totalKilled += killed;
+        detected += found;
+        valid += fileValid;
     }
 
     if (totalKilled == 0)
         throw new InvalidDataException("No production mutant was killed; check mutation scope and test discovery.");
+    if ((long)detected * baselineValid < (long)baselineDetected * valid)
+    {
+        Console.Error.WriteLine($"Detected {detected}/{valid} valid mutants, below the {baselineDetected}/{baselineValid} baseline.");
+        return 1;
+    }
+    Console.WriteLine($"Detected {detected}/{valid} valid mutants (baseline {baselineDetected}/{baselineValid}).");
     return 0;
 }
 

@@ -1,0 +1,26 @@
+<Project>
+  <PropertyGroup Label="Roslyn">
+    <maxClassCoupling>54</maxClassCoupling>
+    <maxTypeDepthOfInheritance>4</maxTypeDepthOfInheritance>
+    <minMethodMaintainabilityIndex>48</minMethodMaintainabilityIndex>
+    <maxMethodCyclomaticComplexity>10</maxMethodCyclomaticComplexity>
+    <maxMethodSourceLines>46</maxMethodSourceLines>
+    <maxMethodExecutableLines>28</maxMethodExecutableLines>
+  </PropertyGroup>
+  <PropertyGroup Label="Coverage">
+    <minLineCoverage>80</minLineCoverage>
+    <minBranchCoverage>80</minBranchCoverage>
+  </PropertyGroup>
+  <PropertyGroup Label="CRAP">
+    <crapMethodThreshold>25</crapMethodThreshold>
+  </PropertyGroup>
+  <PropertyGroup Label="Duplication">
+    <minCloneTokens>25</minCloneTokens>
+  </PropertyGroup>
+  <PropertyGroup Label="Mutation">
+    <detectedMutants>80</detectedMutants>
+    <validMutants>100</validMutants>
+    <!-- Report coloring only; detectedMutants / validMutants is the passing score. -->
+    <mutationReportHigh>90</mutationReportHigh>
+  </PropertyGroup>
+</Project>

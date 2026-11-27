@@ -11,10 +11,11 @@ using Microsoft.CodeAnalysis.CodeMetrics;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
 using Microsoft.CodeAnalysis.MSBuild;
 
-const int maxSourceLines = 46, maxExecutableLines = 28;
 var projectFile = Path.Combine(Repository.Root, "DevTunnelSvc", "DevTunnelSvc.csproj");
 var report = Repository.ReportPath("metrics");
 File.Delete(report);
+var maxSourceLines = Repository.Threshold("maxMethodSourceLines");
+var maxExecutableLines = Repository.Threshold("maxMethodExecutableLines");
 
 // Also enforce the four SDK analyzer thresholds when this check runs outside CI.
 var build = await Process.RunAsync("dotnet", ["build", projectFile, "-c", "Release"]);

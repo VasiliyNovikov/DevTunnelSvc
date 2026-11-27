@@ -26,9 +26,23 @@
     <PackageReference Include="Microsoft.DevTunnels.Connections" />
     <PackageReference Include="System.CommandLine" />
     <PackageReference Include="System.Security.Cryptography.ProtectedData" Condition="'$(UseWindowsForms)' != 'true'" />
-    <AdditionalFiles Include="CodeMetricsConfig.txt" />
     <InternalsVisibleTo Include="DevTunnelSvc.Tests" />
     <InternalsVisibleTo Include="DevTunnelSvc.UpdateSmoke" />
   </ItemGroup>
+
+  <Target Name="GenerateCodeMetricsConfig" BeforeTargets="CoreCompile">
+    <PropertyGroup>
+      <_MetricsConfig>$(IntermediateOutputPath)CodeMetricsConfig.txt</_MetricsConfig>
+    </PropertyGroup>
+    <WriteLinesToFile File="$(_MetricsConfig)" Overwrite="true" WriteOnlyWhenDifferent="true"
+                      Lines="CA1501(Type): $(maxTypeDepthOfInheritance);
+                             CA1502(Method): $(maxMethodCyclomaticComplexity);
+                             CA1505(Method): $(minMethodMaintainabilityIndex);
+                             CA1506(Type): $(maxClassCoupling)" />
+    <ItemGroup>
+      <AdditionalFiles Include="$(_MetricsConfig)" />
+      <FileWrites Include="$(_MetricsConfig)" />
+    </ItemGroup>
+  </Target>
 
 </Project>

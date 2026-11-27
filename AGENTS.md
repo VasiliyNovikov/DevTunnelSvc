@@ -76,9 +76,11 @@ For local Linux testing on Windows, use a disposable WSLC container (`wslc run -
 - Make the service responsible for cancelling and awaiting its forwarding tasks on shutdown or reconnect. Report a connection as ready only after the SDK confirms it; surface failures through the CLI exit code and stderr.
 - Keep protocol and settings types compatible with Native AOT. Use a source-generated `System.Text.Json` context for wire types and version incompatible changes so that an older CLI cannot misinterpret a service response.
 - Prefer a few focused MSTest cases at the behavior boundary: CLI output and exit status, port mappings, and connection lifetime. Extend existing test classes when the behavior belongs there. Keep the default suite independent of live tunnels, GitHub credentials, and fixed local ports.
-- Use LF for text files. Build-time metrics are configured in `DevTunnelSvc/CodeMetricsConfig.txt`; `eng/metrics.cs` checks method length. Split methods by responsibility rather than removing whitespace or comments to pass a gate. Review threshold changes explicitly; CI must not rewrite them.
+- Use LF for text files. Split methods by responsibility rather than removing whitespace or comments to pass a gate.
 
 ## Quality gates
+
+Edit [code-metrics-baseline.props](code-metrics-baseline.props) to change a numeric quality threshold. MSBuild and the engineering scripts read the same literal integers; CI never rewrites them. The production build generates the Roslyn analyzers' `CodeMetricsConfig.txt` under `obj/`. Review baseline changes explicitly.
 
 Run the same checks as CI from the repository root. No global .NET tools are required. Run formatting after a build or restore.
 
@@ -93,11 +95,11 @@ dotnet format whitespace DevTunnelSvc.slnx --no-restore --verify-no-changes
 
 | Gate | Passing condition |
 | --- | --- |
-| Coverage | At least 80% line **and** 80% branch coverage in the production assembly. Exclude only the framework generators' JSON serializers and native interop stubs, not the handwritten service or platform code. |
-| CRAP (complexity vs. coverage) | No method scores above 25: total CRAP load is zero. Coverage must match production methods. |
-| Mutation | Stryker score at least 80%. Each file with valid mutants needs a kill; an empty run fails. |
-| Duplication | No repeated non-overlapping sequence of 25 or more identical C# tokens, within or across files. The check includes production, Windows code, tests, and `eng/` tools. |
-| Maintainability | Production builds cap method complexity at 10, inheritance depth at 4, and type coupling at 54. Method maintainability index must be at least 48. CI also caps declared methods at 46 source lines and 28 executable lines. |
+| Coverage | Line and branch coverage must each meet their configured minimum in the production assembly. Exclude only the framework generators' JSON serializers and native interop stubs, not the handwritten service or platform code. |
+| CRAP (complexity vs. coverage) | No method scores above `crapMethodThreshold`: total CRAP load is zero. Coverage must match production methods. |
+| Mutation | The detected/valid score must meet `detectedMutants / validMutants`, without rounding. Each file with valid mutants needs a kill; an empty run fails. `mutationReportHigh` only colors the report. |
+| Duplication | No repeated non-overlapping sequence of `minCloneTokens` or more identical C# tokens, within or across files. The check includes production, Windows code, tests, and `eng/` tools. |
+| Maintainability | Production builds enforce the Roslyn complexity, inheritance, coupling, and maintainability limits. `eng/metrics.cs` also caps source and executable lines per declared method. |
 
 The [AuthBridge duplication rule](https://github.com/VasiliyNovikov/AuthBridge/blob/e06413cd564f62da46bf656a0365dd679fac2763/duplication.cs) uses Roslyn with `WINDOWS` defined. Using directives, comments, and whitespace do not count; identifiers and literals must match exactly. Hidden directories and build/test outputs are skipped. Extract shared behavior rather than adding exclusions or raising the threshold.
 

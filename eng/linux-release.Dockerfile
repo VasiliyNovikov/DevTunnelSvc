@@ -2,7 +2,7 @@ ARG VERSION=0.0.0-dev
 FROM registry.access.redhat.com/ubi8/ubi:8.10 AS build
 RUN dnf install -y dotnet-sdk-11.0 && dnf clean all
 WORKDIR /src
-COPY Directory.Build.props Directory.Packages.props ./
+COPY Directory.Build.props Directory.Packages.props code-metrics-baseline.props ./
 COPY DevTunnelSvc/ DevTunnelSvc/
 COPY eng/release.cs eng/Repository.cs eng/
 ARG VERSION

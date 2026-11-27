@@ -22,8 +22,17 @@
     <ExcludeByFile>**/System.Text.Json.SourceGeneration.JsonSourceGenerator/*.g.cs,**/Microsoft.Interop.LibraryImportGenerator/LibraryImports.g.cs</ExcludeByFile>
     <CoverletOutput>$(MSBuildProjectDirectory)/../artifacts/coverage/</CoverletOutput>
     <CoverletOutputFormat>cobertura</CoverletOutputFormat>
-    <Threshold>80</Threshold>
+    <Threshold>$(minLineCoverage),$(minBranchCoverage)</Threshold>
     <ThresholdType>line,branch</ThresholdType>
   </PropertyGroup>
+
+  <Target Name="ValidateCoverageBaseline" BeforeTargets="PrepareForBuild;GenerateCoverageResult" Condition="'$(CollectCoverage)' == 'true'">
+    <ItemGroup>
+      <_CoverageGate Include="minLineCoverage" Value="$(minLineCoverage)" />
+      <_CoverageGate Include="minBranchCoverage" Value="$(minBranchCoverage)" />
+    </ItemGroup>
+    <Error Condition="!$([System.Text.RegularExpressions.Regex]::IsMatch('%(_CoverageGate.Value)', '^(100|[1-9][0-9]?)$'))"
+           Text="code-metrics-baseline.props: %(_CoverageGate.Identity) must be an integer from 1 to 100." />
+  </Target>
 
 </Project>
