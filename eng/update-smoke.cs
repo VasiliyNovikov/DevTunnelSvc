@@ -27,7 +27,7 @@ if (args is ["smoke-pid"])
     try { Console.WriteLine(await Send(new("service-pid"), limit.Token)); return 0; }
     catch (IOException ex) when (ex.InnerException is TimeoutException) { return 1; }
 }
-if (args is ["service", "start"] && File.Exists(Path.Combine(state, "reject-start"))) return 37;
+if (args is ["start"] && File.Exists(Path.Combine(state, "reject-start"))) return 37;
 
 using var http = new HttpClient(new OfflineRelease(state));
 UpdateInstallation Installation()

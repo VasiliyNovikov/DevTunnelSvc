@@ -33,7 +33,7 @@ internal static class Control
         using var limit = CancellationTokenSource.CreateLinkedTokenSource(cancellation);
         limit.CancelAfter(TimeSpan.FromSeconds(65));
         try { await pipe.ConnectAsync(1500, limit.Token); }
-        catch (TimeoutException ex) { throw new IOException("Service is not available. Run 'service start' first.", ex); }
+        catch (TimeoutException ex) { throw new IOException("Service is not available. Run 'devtunnelsvc start' first.", ex); }
         await WriteAsync(pipe, request, ControlJson.Default.Request, limit.Token);
         var reply = await ReadAsync(pipe, ControlJson.Default.Reply, limit.Token);
         if (reply.Version != ProtocolVersion)

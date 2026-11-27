@@ -81,7 +81,7 @@
                 $attrs = [IO.File]::GetAttributes($target)
                 if (($attrs -band ([IO.FileAttributes]::ReparsePoint -bor [IO.FileAttributes]::Directory)) -or
                     (Get-FileHash -LiteralPath $target).Hash -ne (Get-FileHash -LiteralPath $staged).Hash) {
-                    throw "$target differs from $tag; it was not changed. For a trusted existing installation, use 'devtunnelsvc service stop' and 'devtunnelsvc update'."
+                    throw "$target differs from $tag; it was not changed. For a trusted existing installation, stop its service and run 'devtunnelsvc update'."
                 }
             } else {
                 [IO.File]::Move($staged, $target)
@@ -95,9 +95,12 @@
 
     Set-InstallPath $dir
     Write-Output "Installed devtunnelsvc $version at $target"
-    & $target service install
+    # The script on main can still be installing a verified release with the old syntax.
+    $prefix = @()
+    if ($tag -cmatch '^v0\.1\.([0-9]|1[0-6])$') { $prefix = @('service') }
+    & $target @prefix install
     if ($LASTEXITCODE -ne 0) { throw 'Service registration failed.' }
-    $status = @(& $target service start)
+    $status = @(& $target @prefix start)
     if ($LASTEXITCODE -ne 0) { throw 'Service startup failed.' }
     if (!$status.Count) { throw 'The service did not report its sign-in state.' }
     $status | Write-Output

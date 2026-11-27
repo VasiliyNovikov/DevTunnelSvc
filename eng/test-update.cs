@@ -56,7 +56,7 @@ static void TestUpdate(DirectoryInfo work, Scenario scenario, string oldImage, s
     var cli = new FixtureCli(exe, state);
     try
     {
-        cli.Run(["service", "start"]);
+        cli.Run(["start"]);
         var before = cli.Run(["smoke-pid"]);
         var rejectStart = scenario is Scenario.StartFailure or Scenario.TrayStartFailure;
         if (rejectStart) File.WriteAllText(Path.Combine(state, "reject-start"), "");
@@ -94,7 +94,7 @@ static void TestUpdate(DirectoryInfo work, Scenario scenario, string oldImage, s
         if (rejectStart)
         {
             Expect(reply, "exited with code 37", "Application log:");
-            Expect(log, "service start exit code: 37");
+            Expect(log, "start exit code: 37");
         }
         else
         {
@@ -187,7 +187,7 @@ internal sealed class FixtureCli(string image, string state)
             throw new InvalidOperationException($"PID {pid} is not the isolated service.");
         try
         {
-            Run(["service", "stop"]);
+            Run(["stop"]);
             if (!service.WaitForExit(10_000)) throw new TimeoutException("Isolated service did not stop.");
         }
         finally { Terminate(service, entireTree: false); }

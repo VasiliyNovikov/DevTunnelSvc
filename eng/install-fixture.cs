@@ -4,6 +4,7 @@
 #:include FixtureFiles.cs
 var root = Environment.GetEnvironmentVariable("DEVTUNNELSVC_INSTALL_FIXTURE") ?? throw new InvalidOperationException("Missing installer fixture.");
 var arch = Path.GetFileName(root);
+var version = File.ReadAllText(Path.Combine(root, "version"));
 var home = Path.Combine(root, "user home");
 var image = Environment.ProcessPath!;
 const string fixtureUid = "1001";
@@ -27,7 +28,7 @@ switch (Path.GetFileNameWithoutExtension(image))
         var source = args[^1] switch
         {
             "https://api.github.com/repos/VasiliyNovikov/DevTunnelSvc/releases/latest" => "release.json",
-            var url when url == $"https://github.com/VasiliyNovikov/DevTunnelSvc/releases/download/v1.2.3/devtunnelsvc-linux-{arch}" => "payload",
+            var url when url == $"https://github.com/VasiliyNovikov/DevTunnelSvc/releases/download/v{version}/devtunnelsvc-linux-{arch}" => "payload",
             _ => throw new ArgumentException("Unexpected download URL.")
         };
         var destination = Path.GetFullPath(args[index + 1]);
@@ -57,14 +58,16 @@ switch (Path.GetFileNameWithoutExtension(image))
 var pathComparison = OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
 if (!image.StartsWith(home + Path.DirectorySeparatorChar, pathComparison)) throw new InvalidOperationException("Ran a CLI from PATH instead of the download.");
 Record(string.Join(' ', args));
-if (args is ["--version"]) { Console.WriteLine("1.2.3"); return 0; }
+if (args is ["--version"]) { Console.WriteLine(version); return 0; }
 var target = FixtureFiles.InstalledCli(home);
 if (!string.Equals(image, target, pathComparison))
     throw new InvalidOperationException("Did not run the CLI from the isolated install directory.");
 switch (args)
 {
-    case ["service", "install"]: return 0;
-    case ["service", "start"]:
+    case ["install"] when version != "0.1.16":
+    case ["service", "install"] when version == "0.1.16": return 0;
+    case ["start"] when version != "0.1.16":
+    case ["service", "start"] when version == "0.1.16":
         if (File.Exists(Path.Combine(root, "refuse-start"))) { Console.Error.WriteLine("Fixture startup failed."); return 7; }
         Console.WriteLine(File.Exists(Path.Combine(root, "signed")) ? "Service running; signed in." : "Service running; signed out.");
         return 0;

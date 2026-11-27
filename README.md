@@ -49,11 +49,11 @@ Keep the executable in a stable, user-writable location on `PATH`. On Windows, e
 
 ## Forward an application
 
-Install on **both machines** and use the same GitHub account for this example. If you downloaded the binary manually, run the following setup commands; the one-line installers already run them. `service install` registers the Windows tray process at sign-in or installs and enables the Linux systemd **user** unit.
+Install on **both machines** and use the same GitHub account for this example. If you downloaded the binary manually, run the following setup commands; the one-line installers already run them. `install` registers the Windows tray process at sign-in or installs and enables the Linux systemd **user** unit.
 
 ```shell
-devtunnelsvc service install
-devtunnelsvc service start
+devtunnelsvc install
+devtunnelsvc start
 devtunnelsvc login
 ```
 
@@ -95,7 +95,7 @@ If upgrading from a memory-only build, stop the old service before replacing the
 
 Successful `host` and `connect` commands save their tunnel ID and exact ports in the per-user `DevTunnelSvc` state directory (`mappings.json`, separate from sign-in). The service re-hosts and reconnects these mappings on startup, including after an update. An offline peer doesn't block startup or other mappings: `devtunnelsvc status` shows which mappings are restoring or retrying. Failed restores retry every 30 seconds; `list` queries your cloud tunnels instead.
 
-Use the mapping name from `status` to close **and forget** one mapping: for example, `devtunnelsvc disconnect connect:blue-tunnel.use2:5000` for a client, or `devtunnelsvc stop host:blue-tunnel.use2` for a host. `stop` also accepts client mappings. Neither command deletes the cloud tunnel; only `delete TUNNEL` does that. One hosted mapping is supported per tunnel at a time. `service stop` and tray **Exit** preserve mappings for the next start. When upgrading from v0.1.6 or earlier, reissue `host` and `connect` once: those versions never saved their mappings.
+Use the mapping name from `status` to close **and forget** one mapping: `devtunnelsvc unhost host:blue-tunnel.use2` for a host, or `devtunnelsvc disconnect connect:blue-tunnel.use2:5000` for a client. Neither command deletes the cloud tunnel; only `delete TUNNEL` does that. One hosted mapping is supported per tunnel at a time. `devtunnelsvc stop` takes no mapping name: like tray **Exit**, it stops the service and preserves mappings for the next start. When upgrading from v0.1.6 or earlier, reissue `host` and `connect` once: those versions never saved their mappings.
 
 <img src="DevTunnelSvc/Assets/devtunnelsvc.png" width="32" height="32" alt="Teal tunnel and outbound arrow"> On Windows, right-click the notification-area icon for **Status**, **Check for updates**, **Auto-update**, **About**, or **Exit**. **Status** opens or refreshes two lists: the signed-in account's available tunnels and registered ports, and this service's local hosts and client connections. Local rows show the tunnel port, host target or client listener, and connection state even if the cloud list is unavailable. The menu stays available while Status is open. **About** shows the running version. The Windows Forms menu and dialogs follow the Windows 11 app theme; high contrast and older Windows versions use system colors. **Exit** stops the service and its mappings without signing you out or removing its startup registration.
 
@@ -110,9 +110,11 @@ On both platforms, `update --check` only reports availability. `update --force` 
 
 The setting is per user and survives service restarts and updates. While the service is running, use `devtunnelsvc auto-update status` to see it or `devtunnelsvc auto-update disable` to turn it off. Unchecking the tray item does the same. Disabling does not stop any tunnels, and a stopped service does not check for releases.
 
-Plain `update` never stops a running service. To control downtime yourself, run `devtunnelsvc service stop`, `devtunnelsvc update`, then `devtunnelsvc service start`. `service run` runs in the foreground for diagnostics. Linux requires a running systemd user manager for `install` and `start`. If you installed the binary manually rather than using `install.sh`, run `loginctl enable-linger "$(id -u)"` to keep the service running after logout.
+Plain `update` never stops a running service. To control downtime yourself, run `devtunnelsvc stop`, `devtunnelsvc update`, then `devtunnelsvc start`. `devtunnelsvc run` runs in the foreground for diagnostics. Linux requires a running systemd user manager for `install` and `start`. If you installed the binary manually rather than using `install.sh`, run `loginctl enable-linger "$(id -u)"` to keep the service running after logout.
 
-If an update reports **Installed** but the service did not restart, run `devtunnelsvc service start`; there is no need to reinstall. See the [application log](#application-log) for the install, restart, and readiness results.
+**Upgrading from v0.1.16 or earlier:** stop the old service with `devtunnelsvc service stop` before running `devtunnelsvc update`. Once the new binary is installed, run `devtunnelsvc install` once to rewrite the Windows sign-in entry or Linux systemd unit, then `devtunnelsvc start`. The new CLI does not accept the `service` prefix. If the old automatic or forced updater already installed the new binary but reported a restart failure, run those same two commands; your saved mappings and sign-in are preserved.
+
+For a later update that reports **Installed** but did not restart the service, run `devtunnelsvc start`. See the [application log](#application-log) for the install, restart, and readiness results.
 
 To uninstall, run `devtunnelsvc logout` to remove the credential, then stop the service. On Windows remove the `DevTunnelSvc` value from `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`. On Linux run `systemctl --user disable devtunnelsvc.service`, remove `devtunnelsvc.service` from your systemd user configuration directory, and run `systemctl --user daemon-reload`. Then remove the downloaded executable.
 

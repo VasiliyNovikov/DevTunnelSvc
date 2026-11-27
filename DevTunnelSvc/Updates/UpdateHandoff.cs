@@ -67,7 +67,7 @@ internal sealed record UpdateHandoff(Func<Request, CancellationToken, Task<strin
         {
             trace?.Invoke($"Restart failed: {AppLog.ErrorCode(ex)}");
             var result = installError is null ? $"Installed {tag}." : $"Update failed: {AppLog.Detail(installError)}";
-            throw new InvalidOperationException($"{result}\nThe service could not start: {AppLog.Detail(ex)}\nRun 'devtunnelsvc service start'.", ex);
+            throw new InvalidOperationException($"{result}\nThe service could not start: {AppLog.Detail(ex)}\nRun 'devtunnelsvc start'.", ex);
         }
         var started = wasRunning ? "restarted" : "started";
         if (installError is not null)
@@ -82,10 +82,10 @@ internal sealed record UpdateHandoff(Func<Request, CancellationToken, Task<strin
         using var sink = File.OpenNullHandle();
         async Task<(string Command, int Code)> StartAndProbeAsync()
         {
-            trace?.Invoke("Launching installed service start.");
-            var start = await run(new(executable, ["service", "start"]) { CreateNoWindow = true, StandardOutputHandle = sink }, limit.Token);
-            trace?.Invoke($"service start exit code: {start}.");
-            if (start != 0) return ("service start", start);
+            trace?.Invoke("Launching installed start command.");
+            var start = await run(new(executable, ["start"]) { CreateNoWindow = true, StandardOutputHandle = sink }, limit.Token);
+            trace?.Invoke($"start exit code: {start}.");
+            if (start != 0) return ("start", start);
             // Probe after the short-lived starter exits, using the newly installed protocol.
             var status = new ProcessStartInfo(executable, ["status"]) { CreateNoWindow = true, StandardOutputHandle = sink };
             var code = await run(status, limit.Token);

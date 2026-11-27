@@ -77,15 +77,15 @@ public sealed class ServiceTests : IDisposable
             Assert.IsTrue(details.SignedIn);
             CollectionAssert.AreEquivalent(new LocalMappingStatus[] { new(true, "blue-tunnel.use2", 8080, 3000, "Connected"),
                 new(false, "blue-tunnel.use2", 8080, 5000, "Connected") }, details.Mappings);
-            Assert.Contains("Stop", (await Assert.ThrowsExactlyAsync<InvalidOperationException>(() => pipe.SendAsync(new("delete", "blue-tunnel.use2")))).Message);
-            Assert.AreEqual(0, await Run("stop", "host:blue-tunnel.use2"));
+            Assert.Contains("unhost", (await Assert.ThrowsExactlyAsync<InvalidOperationException>(() => pipe.SendAsync(new("delete", "blue-tunnel.use2")))).Message);
+            Assert.AreEqual(0, await Run("unhost", "host:blue-tunnel.use2"));
             Assert.IsTrue(backend.Sessions[0].Disposed);
             Assert.IsFalse(backend.Sessions[1].Disposed);
             Assert.AreEqual(0, await Run("logout"));
             Assert.Contains("Signed out", output.ToString());
             Assert.Contains("signed out", await pipe.SendAsync(new("status")));
             Assert.IsTrue(backend.Sessions[1].Disposed);
-            await pipe.SendAsync(new("shutdown"));
+            Assert.AreEqual(0, await Run("stop"));
             await server;
         }
         finally { await pipe.StopAsync(server); }
@@ -151,7 +151,12 @@ public sealed class ServiceTests : IDisposable
             Assert.Contains($"{host.Name}  Connected  {host.Route}", status);
             Assert.Contains($"{client.Name}  Connected  {client.Route}", status);
             CollectionAssert.AreEquivalent(new[] { host, client }, next.Sessions.Select(s => s.Map).ToArray());
-            await Assert.ThrowsExactlyAsync<ArgumentException>(() => service.ExecuteAsync(new("disconnect", host.Name), ct));
+            var wrongRole = await Cli.CaptureAsync(["unhost", client.Name], service.ExecuteAsync);
+            Assert.AreEqual(1, wrongRole.Code);
+            Assert.Contains("Use 'disconnect'", wrongRole.Error);
+            Assert.Contains("Use 'unhost'", (await Assert.ThrowsExactlyAsync<ArgumentException>(() => service.ExecuteAsync(new("disconnect", host.Name), ct))).Message);
+            CollectionAssert.AreEquivalent(new[] { host, client }, mappings.Read());
+            Assert.IsFalse(next.Sessions.Any(s => s.Disposed));
             Assert.AreEqual(0, await Cli.RunAsync(["disconnect", client.Name], TextWriter.Null, TextWriter.Null, service.ExecuteAsync));
             Assert.IsTrue(next.Sessions.Single(s => s.Map == client).Disposed);
             Assert.IsFalse(next.Sessions.Single(s => s.Map == host).Disposed);
@@ -186,6 +191,7 @@ public sealed class ServiceTests : IDisposable
         await using var service = CreateService(backend);
         await entered.Task.WaitAsync(limit.Token);
         Assert.Contains($"{map.Name}  Restoring", await service.ExecuteAsync(new("status"), limit.Token));
+        // A pre-flattening CLI's wire request must still remove just this mapping.
         await service.ExecuteAsync(new("stop", map.Name), limit.Token).WaitAsync(limit.Token);
         Assert.IsTrue(cancelled);
         Assert.IsEmpty(mappings.Read());
@@ -297,10 +303,10 @@ public sealed class ServiceTests : IDisposable
         await SignInAsync(service, "token");
         await service.ExecuteAsync(Host, ct);
         Assert.Contains("already exists", (await Assert.ThrowsExactlyAsync<InvalidOperationException>(() => service.ExecuteAsync(Host, ct))).Message);
-        Assert.Contains("Stop active", (await Assert.ThrowsExactlyAsync<InvalidOperationException>(() => service.ExecuteAsync(new("login", SignIn: new("other")), ct))).Message);
-        await Assert.ThrowsExactlyAsync<ArgumentException>(() => service.ExecuteAsync(new("stop"), ct));
-        await Assert.ThrowsExactlyAsync<ArgumentException>(() => service.ExecuteAsync(new("stop", "missing"), ct));
-        await service.ExecuteAsync(new("stop", "host:blue-tunnel.use2"), ct);
+        Assert.Contains("remove active mappings", (await Assert.ThrowsExactlyAsync<InvalidOperationException>(() => service.ExecuteAsync(new("login", SignIn: new("other")), ct))).Message);
+        await Assert.ThrowsExactlyAsync<ArgumentException>(() => service.ExecuteAsync(new("unhost"), ct));
+        await Assert.ThrowsExactlyAsync<ArgumentException>(() => service.ExecuteAsync(new("unhost", "missing"), ct));
+        await service.ExecuteAsync(new("unhost", "host:blue-tunnel.use2"), ct);
         Assert.Contains("Deleted blue-tunnel.use2", await service.ExecuteAsync(new("delete", "blue-tunnel.use2"), ct));
         await AssertTunnelAbsentAsync(service, ct);
     }
@@ -398,7 +404,7 @@ public sealed class ServiceTests : IDisposable
     [TestMethod]
     public async Task LargestValidControlFrameIsFlushedAndRoundTrips()
     {
-        var empty = new Request("stop", Tunnel: "");
+        var empty = new Request("unhost", Tunnel: "");
         var overhead = JsonSerializer.SerializeToUtf8Bytes(empty, ControlJson.Default.Request).Length;
         var request = empty with { Tunnel = new string('x', 32 * 1024 - overhead) };
         using var wire = new MemoryStream();
@@ -421,8 +427,11 @@ public sealed class ServiceTests : IDisposable
         var missing = await Assert.ThrowsExactlyAsync<InvalidOperationException>(() => service.ExecuteAsync(new("delete", "missing-tunnel.use2"), ct));
         Assert.Contains("not found", missing.Message);
         await service.ExecuteAsync(Host, ct);
-        Assert.Contains("stopping", await service.ExecuteAsync(new("shutdown"), ct));
+        var stopped = await Cli.CaptureAsync(["stop"], service.ExecuteAsync);
+        Assert.AreEqual(0, stopped.Code);
+        Assert.Contains("stopping", stopped.Output);
         Assert.IsTrue(backend.Sessions.Single().Disposed);
+        Assert.AreEqual(backend.Sessions.Single().Map, mappings.Read().Single());
         Assert.AreEqual("user-token", await credential.RequireTokenAsync(ct));
         await AssertTunnelAbsentAsync(service, ct);
     }
@@ -520,7 +529,7 @@ public sealed class ServiceTests : IDisposable
     public void SystemdUnitQuotesExecutablePathsWithoutShellExpansion()
     {
         var unit = ServiceLifetime.UnitFile("/home/me/$path/100% ready/\"tunnel\"");
-        Assert.Contains("ExecStart=\"/home/me/$$path/100%% ready/\\\"tunnel\\\"\" service run", unit);
+        Assert.Contains("ExecStart=\"/home/me/$$path/100%% ready/\\\"tunnel\\\"\" run", unit);
         Assert.Contains("WantedBy=default.target", unit);
         Assert.ThrowsExactly<ArgumentException>(() => ServiceLifetime.UnitFile("/tmp/path\nExecStart=bad"));
     }

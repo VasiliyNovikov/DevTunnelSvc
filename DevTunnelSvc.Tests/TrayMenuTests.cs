@@ -254,9 +254,9 @@ public sealed class TrayMenuTests
     }
 
     [TestMethod]
-    [DataRow(0, 0, "service start,status")]
-    [DataRow(17, 0, "service start,service start,status")]
-    [DataRow(0, 17, "service start,status,service start,status")]
+    [DataRow(0, 0, "start,status")]
+    [DataRow(17, 0, "start,start,status")]
+    [DataRow(0, 17, "start,status,start,status")]
     public async Task StartVerifiesReadinessAfterTheInstalledHelperExits(int firstStart, int firstStatus, string expected)
     {
         const string installed = @"C:\Apps with spaces\devtunnelsvc.exe";
@@ -276,8 +276,8 @@ public sealed class TrayMenuTests
     }
 
     [TestMethod]
-    [DataRow(true, "service start", "service start,service start")]
-    [DataRow(false, "status", "service start,status,service start,status")]
+    [DataRow(true, "start", "start,start")]
+    [DataRow(false, "status", "start,status,start,status")]
     public async Task FailedRestartReportsWhetherTheStarterOrTheIndependentProbeFailed(bool failStart, string failedCommand, string expected)
     {
         List<string> commands = [];

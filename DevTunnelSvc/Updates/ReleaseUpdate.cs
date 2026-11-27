@@ -48,7 +48,7 @@ internal sealed class ReleaseUpdate(HttpClient http, UpdateHandoff? force = null
                 await DownloadAndInstallAsync(release, executable, token);
             }, ct);
         await ApplyAsync(release, executable, acquireUpdateLease, ct);
-        return $"Installed {release.TagName}. Run 'service start' to restart the service.";
+        return $"Installed {release.TagName}. Run 'devtunnelsvc start' to restart the service.";
     }
 
     internal async Task<ReleaseInfo?> FindNewerAsync(string current, CancellationToken ct)

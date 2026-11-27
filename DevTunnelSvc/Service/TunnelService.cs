@@ -59,7 +59,9 @@ internal sealed class TunnelService : IAsyncDisposable
             "regions" => () => RegionsAsync(ct),
             "delete" => () => DeleteAsync(TunnelKey.Parse(request.Tunnel), ct),
             "host" or "connect" => () => OpenAsync(Mapping.Create(request.Command == "host", request.Tunnel, request.TunnelPort, request.LocalPort), ct),
-            "stop" or "disconnect" => () => StopAsync(request.Tunnel, clientOnly: request.Command == "disconnect"),
+            "unhost" or "disconnect" => () => RemoveMappingAsync(request.Tunnel, host: request.Command == "unhost"),
+            // A v3 CLI's "stop" wire request removes a named mapping; never reinterpret it as shutdown.
+            "stop" => () => RemoveMappingAsync(request.Tunnel, host: null),
             "shutdown" => () => EndSessionAsync(logout: false),
             "shutdown-for-update" => () => request.ServicePid == Environment.ProcessId ? EndSessionAsync(logout: false)
                 : throw new InvalidOperationException("The selected service instance has changed. Check for updates again."),
@@ -76,7 +78,7 @@ internal sealed class TunnelService : IAsyncDisposable
     private async Task<string> LoginAsync(GitHubCredential? signIn, CancellationToken ct)
     {
         if (sessions.Count != 0)
-            throw new InvalidOperationException("Stop active mappings before changing accounts.");
+            throw new InvalidOperationException("Use 'unhost' or 'disconnect' to remove active mappings before changing accounts.");
         if (signIn is null) throw new ArgumentException("Missing sign-in credential.");
         // A failed logout must not carry a previous account's saved routes into a new grant.
         mappings.Save([]);
@@ -105,23 +107,23 @@ internal sealed class TunnelService : IAsyncDisposable
         return $"{map.Name}  {map.Route}";
     }
 
-    private async Task<string> StopAsync(string? name, bool clientOnly)
+    private async Task<string> RemoveMappingAsync(string? name, bool? host)
     {
         if (name is null || !sessions.TryGetValue(name, out var item))
             throw new ArgumentException("Mapping not found. Use 'status' to see mapping names.");
-        if (clientOnly && item.Map.Host)
-            throw new ArgumentException("This is a hosted mapping. Use 'stop' to stop hosting it.");
+        if (host is not null && item.Map.Host != host)
+            throw new ArgumentException(item.Map.Host ? "This is a host mapping. Use 'unhost'." : "This is a client mapping. Use 'disconnect'.");
         mappings.Save(SavedMappings.Where(map => map.Name != name));
         item.Saved = false;
         await item.DisposeAsync();
         sessions.Remove(name);
-        return clientOnly ? $"Disconnected {name}." : $"Stopped {name}.";
+        return host == false ? $"Disconnected {name}." : $"Stopped {name}.";
     }
 
     private async Task<string> DeleteAsync(TunnelKey key, CancellationToken ct)
     {
         if (sessions.Values.Any(s => s.Map.Tunnel == key))
-            throw new InvalidOperationException("Stop this tunnel's active mappings before deleting it.");
+            throw new InvalidOperationException("Use 'unhost' or 'disconnect' to remove this tunnel's active mappings before deleting it.");
         return await Authenticated().DeleteAsync(key, ct) ? $"Deleted {key}." : throw new InvalidOperationException($"Tunnel {key} was not found.");
     }
 

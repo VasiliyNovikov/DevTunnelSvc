@@ -140,7 +140,7 @@ public sealed class LifetimeTests : IDisposable
                 return Task.CompletedTask;
             }, CancellationToken.None);
             var unit = await File.ReadAllTextAsync(Path.Combine(config.FullName, "systemd", "user", "devtunnelsvc.service"));
-            Assert.Contains("ExecStart=\"/home/me/apps/dev tunnel\" service run", unit);
+            Assert.Contains("ExecStart=\"/home/me/apps/dev tunnel\" run", unit);
             Assert.Contains("Restart=on-failure", unit);
             Assert.AreEqual("daemon-reload;enable devtunnelsvc.service", string.Join(';', calls));
             await Assert.ThrowsExactlyAsync<IOException>(() => ServiceLifetime.InstallLinuxAsync("/bin/new", config.FullName,
@@ -163,7 +163,7 @@ public sealed class LifetimeTests : IDisposable
             Assert.Contains("Incompatible", (await Assert.ThrowsExactlyAsync<InvalidDataException>(() => send)).Message);
         }
         var failure = await Assert.ThrowsExactlyAsync<IOException>(() => Control.SendAsync(new("status"), name, ct.Token));
-        Assert.Contains("service start", failure.Message);
+        Assert.Contains("devtunnelsvc start", failure.Message);
         await Assert.ThrowsExactlyAsync<InvalidDataException>(() => Control.WriteAsync(Stream.Null,
             new Request("login", SignIn: new(new string('x', 40000))), ControlJson.Default.Request, ct.Token));
     }

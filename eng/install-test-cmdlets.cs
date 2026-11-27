@@ -110,7 +110,8 @@ namespace DevTunnelSvc.InstallerTests
         {
             var root = Fixture.Root;
             var asset = "devtunnelsvc-win-" + Path.GetFileName(root) + ".zip";
-            Fixture.Require(Uri == "https://github.com/VasiliyNovikov/DevTunnelSvc/releases/download/v1.2.3/" + asset, "Unexpected package URL.");
+            var version = File.ReadAllText(Path.Combine(root, "version"));
+            Fixture.Require(Uri == "https://github.com/VasiliyNovikov/DevTunnelSvc/releases/download/v" + version + "/" + asset, "Unexpected package URL.");
             Fixture.Require(Path.GetFullPath(OutFile).StartsWith(Path.Combine(root, "user home") + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase),
                 "Download escaped the fixture.");
             File.Copy(Path.Combine(root, "payload"), OutFile);

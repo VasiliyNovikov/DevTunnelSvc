@@ -19,11 +19,11 @@ RUN --network=none set -eu; \
     test "$(getconf GNU_LIBC_VERSION)" = 'glibc 2.28'; \
     set -- /packages/linux-*/devtunnelsvc-linux-*; test "$#" -eq 1; \
     test "$("$1" --version)" = "$VERSION"; "$1" --help; \
-    "$1" service run & pid=$!; trap 'kill "$pid" 2>/dev/null || true' EXIT; \
+    "$1" run & pid=$!; trap 'kill "$pid" 2>/dev/null || true' EXIT; \
     "$1" status | grep -F 'Service running; signed out.'; \
     if "$1" create >/tmp/create.out 2>/tmp/create.err; then exit 1; fi; \
     grep -F 'Not signed in' /tmp/create.err; \
-    "$1" service stop; wait "$pid"; trap - EXIT
+    "$1" stop; wait "$pid"; trap - EXIT
 
 FROM scratch
 COPY --from=verified /packages/ /

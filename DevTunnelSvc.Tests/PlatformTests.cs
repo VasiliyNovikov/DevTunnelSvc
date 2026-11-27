@@ -99,13 +99,13 @@ public sealed class PlatformTests
         var registration = "";
         var result = await ServiceLifetime.InstallAsync(exe, "unused", (name, value) => registration = $"{name}={value}",
             (_, _) => throw new AssertFailedException(), ct);
-        Assert.AreEqual($"DevTunnelSvc=\"{exe}\" service start", registration);
-        Assert.Contains("service start", result);
+        Assert.AreEqual($"DevTunnelSvc=\"{exe}\" start", registration);
+        Assert.Contains("devtunnelsvc start", result);
         ProcessStartInfo? launched = null;
         await ServiceLifetime.LaunchAsync(exe, i => launched = i, (_, _) => throw new AssertFailedException(), ct);
         Assert.IsNotNull(launched);
         Assert.AreEqual(exe, launched.FileName);
-        Assert.AreEqual("service run", string.Join(' ', launched.ArgumentList));
+        Assert.AreEqual("run", launched.ArgumentList.Single());
         Assert.IsTrue(launched.UseShellExecute);
         Assert.AreEqual(ProcessWindowStyle.Hidden, launched.WindowStyle);
         var unit = "";

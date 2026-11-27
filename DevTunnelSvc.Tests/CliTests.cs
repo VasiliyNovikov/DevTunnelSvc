@@ -18,6 +18,9 @@ public sealed class CliTests
         Assert.AreEqual(0, exitCode);
         Assert.Contains("Usage: devtunnelsvc", output);
         Assert.Contains("--version", output);
+        Assert.Contains("unhost <mapping>", output);
+        Assert.DoesNotContain("stop <mapping>", output);
+        Assert.DoesNotContain("service install", output);
         Assert.IsEmpty(error);
     }
 
@@ -93,7 +96,7 @@ public sealed class CliTests
             Run = (_, _) => Record("run"),
             Update = (options, _) => Record($"{(options.CheckOnly ? "check" : "apply")}{(options.Force ? "-force" : "")}")
         };
-        string[][] commands = [["service", "install"], ["service", "start"], ["service", "run"], ["service", "stop"],
+        string[][] commands = [["install"], ["start"], ["run"], ["stop"],
             ["update", "--check"], ["update"], ["update", "--force"], ["update", "--force", "--check"]];
         foreach (var command in commands)
             Assert.AreEqual(0, await Cli.RunAsync(command, TextWriter.Null, TextWriter.Null, (r, _) => Record(r.Command), actions));
@@ -101,6 +104,22 @@ public sealed class CliTests
         using var error = new StringWriter();
         Assert.AreNotEqual(0, await Cli.RunAsync(["status"], TextWriter.Null, error, (_, _) => throw new OperationCanceledException()));
         Assert.Contains("cancelled", error.ToString());
+    }
+
+    [TestMethod]
+    [DataRow("service install")]
+    [DataRow("service start")]
+    [DataRow("service run")]
+    [DataRow("service stop")]
+    [DataRow("service --help")]
+    [DataRow("stop host:blue-tunnel.use2")]
+    [DataRow("unhost")]
+    public async Task RemovedOrMisusedCommandsFailWithoutContactingTheService(string command)
+    {
+        var result = await Cli.CaptureAsync(command.Split(' '));
+        Assert.AreEqual(2, result.Code);
+        Assert.Contains("Invalid arguments", result.Error);
+        Assert.IsEmpty(result.Output);
     }
 
     [TestMethod]

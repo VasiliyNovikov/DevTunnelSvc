@@ -523,11 +523,11 @@ public sealed class HttpTests
             var parent = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
             var flow = new CliUpdate(http, "1.0.0", () => new(copy, state, pipe, Run, () => parent.Task));
             Task<string> Apply() => flow.RunAsync(new(false, force, "v2.0.0"), limit.Token);
-            if (validDigest) Assert.Contains(force ? "restarted" : "Run 'service start'", await Apply());
+            if (validDigest) Assert.Contains(force ? "restarted" : "Run 'devtunnelsvc start'", await Apply());
             else Assert.Contains("SHA-256", (await Assert.ThrowsExactlyAsync<InvalidOperationException>(Apply)).Message);
             Assert.AreEqual("original", File.ReadAllText(copy));
             Assert.AreEqual(validDigest ? "verified image" : "original", File.ReadAllText(installed));
-            Assert.AreEqual(force ? "service start,status" : "", string.Join(',', commands));
+            Assert.AreEqual(force ? "start,status" : "", string.Join(',', commands));
             var log = File.ReadAllText(Path.Combine(state, "app.log"));
             Assert.IsFalse(File.Exists(Path.Combine(state, "update.log")));
             if (force)
@@ -536,8 +536,8 @@ public sealed class HttpTests
                 Assert.Contains("[update] Verifying the selected release", log);
                 Assert.Contains($"Stopping service PID {Environment.ProcessId}", log);
                 Assert.Contains("Installing verified release", log);
-                Assert.Contains("Launching installed service start", log);
-                Assert.Contains("service start exit code: 0", log);
+                Assert.Contains("Launching installed start command", log);
+                Assert.Contains("start exit code: 0", log);
                 Assert.Contains("status exit code: 0", log);
                 Assert.Contains(validDigest ? "Installed v2.0.0." : "Install failed: InvalidDataException", log);
             }

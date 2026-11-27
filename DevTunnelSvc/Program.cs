@@ -10,7 +10,10 @@ internal static class Program
 {
     private const string Usage = """
         Usage: devtunnelsvc <command> [options]
-          service install|start|run|stop   Manage the per-user background service
+          install                         Register the per-user service for automatic startup
+          start                           Start the service in the background
+          run                             Run the service in the foreground
+          stop                            Stop the service and keep saved mappings and sign-in
           login [--no-browser] [--no-clipboard]  Sign in with GitHub
           logout                          Forget all mappings and remove the saved GitHub sign-in
           create [--region <region>]      Create a private tunnel in the recommended or chosen region
@@ -20,7 +23,7 @@ internal static class Program
           host <tunnel> --tunnel-port N --target-port N
           connect <tunnel> --tunnel-port N --listen-port N
           status                          Show active and restoring mappings
-          stop <mapping>                  Stop and forget a host or client mapping
+          unhost <mapping>                Stop hosting and forget a host mapping
           disconnect <mapping>            Close and forget a client connection
           update [--check] [--force]      Check or install a newer release; --force also stops and starts the service without asking
           auto-update status|enable|disable  Manage unattended stable updates for this user
@@ -48,6 +51,12 @@ internal static class Program
         {
             output.WriteLine(Version);
             return 0;
+        }
+
+        if (args is ["service", ..])
+        {
+            error.WriteLine("Invalid arguments. The 'service' prefix was removed. Use 'devtunnelsvc install', 'start', 'run', or 'stop' directly.");
+            return 2;
         }
 
         try { return await new Commands(input, output, error, send, actions).InvokeAsync(args); }

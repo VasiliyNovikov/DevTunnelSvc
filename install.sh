@@ -61,7 +61,7 @@ EOF
     fi
     actual=$(sha256sum < "$candidate")
     if [ "$(wc -c < "$candidate")" -ne "$size" ] || [ "${actual%% *}" != "$digest" ]; then
-        [ "$candidate" != "$target" ] || fail "$target differs from $tag; it was not changed. For a trusted existing installation, use 'devtunnelsvc service stop' and 'devtunnelsvc update'."
+        [ "$candidate" != "$target" ] || fail "$target differs from $tag; it was not changed. For a trusted existing installation, stop its service and run 'devtunnelsvc update'."
         fail "Downloaded $asset failed the release size or SHA-256 check."
     fi
     if [ "$candidate" != "$target" ]; then
@@ -79,8 +79,13 @@ EOF
         *) printf 'Add %s to PATH in your shell profile to run devtunnelsvc by name.\n' "$dir" ;;
     esac
 
-    "$target" service install
-    status=$("$target" service start)
+    # This script is served from main even when the latest published CLI still uses the old syntax.
+    case "$tag" in
+        v0.1.[0-9]|v0.1.1[0-6]) set -- service ;;
+        *) set -- ;;
+    esac
+    "$target" "$@" install
+    status=$("$target" "$@" start)
     printf '%s\n' "$status"
     IFS= read -r first_line <<EOF
 $status

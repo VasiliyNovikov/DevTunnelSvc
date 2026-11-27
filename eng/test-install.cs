@@ -87,18 +87,22 @@ static async Task TestInstallAsync(DirectoryInfo fixture, string installer, stri
     }
     await Install();
     string[] linger = windows ? [] : ["enable-linger"];
-    ExpectCalls(root, ["--version", .. linger, "service install", "service start", "login"]);
+    ExpectCalls(root, ["--version", .. linger, "install", "start", "login"]);
     if (HashFile(cli) != HashFile(target)) throw new InvalidDataException("Installed the wrong CLI.");
     if (OperatingSystem.IsLinux()) File.SetUnixFileMode(target, UnixFileMode.UserRead | UnixFileMode.UserWrite);
     await Install();
-    ExpectCalls(root, "--version", "service install", "service start");
+    ExpectCalls(root, "--version", "install", "start");
     if (windows && !File.ReadAllLines(Path.Combine(root, "path-history")).SequenceEqual([initialPath, $"{initialPath};{Path.GetDirectoryName(target)}"]))
         throw new InvalidDataException("User PATH was not updated idempotently.");
 
+    WriteMetadata(root, payload, asset, version: "0.1.16");
+    await Install();
+    ExpectCalls(root, "--version", "service install", "service start");
+    WriteMetadata(root, payload, asset);
     File.Delete(Path.Combine(root, "signed"));
     File.WriteAllText(Path.Combine(root, "refuse-start"), "");
     await Install(windows ? "Service startup failed" : "Fixture startup failed");
-    ExpectCalls(root, "--version", "service install", "service start");
+    ExpectCalls(root, "--version", "install", "start");
 
     File.Delete(target);
     File.WriteAllText(target, "existing install");
@@ -161,11 +165,12 @@ static ProcessStartInfo WindowsPowerShell(string command)
     return host;
 }
 
-static void WriteMetadata(string root, string payload, string assetName, bool badDigest = false)
+static void WriteMetadata(string root, string payload, string assetName, bool badDigest = false, string version = "1.2.3")
 {
     var digest = "sha256:" + (badDigest ? new string('0', 64) : HashFile(payload));
     var asset = new { name = assetName, state = "uploaded", size = new FileInfo(payload).Length, digest };
-    var release = new { tag_name = "v1.2.3", draft = false, prerelease = false, assets = new[] { asset } };
+    var release = new { tag_name = $"v{version}", draft = false, prerelease = false, assets = new[] { asset } };
+    File.WriteAllText(Path.Combine(root, "version"), version);
     File.WriteAllBytes(Path.Combine(root, "release.json"), JsonSerializer.SerializeToUtf8Bytes(release));
 }
 

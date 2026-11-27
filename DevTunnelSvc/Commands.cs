@@ -30,12 +30,12 @@ internal sealed class Commands(TextReader input, TextWriter output, TextWriter e
             root.Subcommands.Add(Action(name, (_, ct) => send(new(name), ct)));
         root.Subcommands.Add(Create());
         root.Subcommands.Add(Login());
-        root.Subcommands.Add(WithName("stop", "mapping"));
+        root.Subcommands.Add(WithName("unhost", "mapping"));
         root.Subcommands.Add(WithName("disconnect", "mapping"));
         root.Subcommands.Add(WithName("delete", "tunnel"));
         root.Subcommands.Add(Forward(true));
         root.Subcommands.Add(Forward(false));
-        root.Subcommands.Add(Service());
+        AddLifetimeCommands(root);
         root.Subcommands.Add(Update());
         root.Subcommands.Add(AutoUpdate());
         root.Subcommands.Add(AutoUpdateWorker());
@@ -156,21 +156,19 @@ internal sealed class Commands(TextReader input, TextWriter output, TextWriter e
         return command;
     }
 
-    private Command Service()
+    private void AddLifetimeCommands(RootCommand root)
     {
-        var service = new Command("service");
-        service.Subcommands.Add(Action("start", (_, ct) => localActions.Start(ct)));
-        service.Subcommands.Add(Action("install", (_, ct) => localActions.Install(ct)));
-        service.Subcommands.Add(Action("stop", (_, ct) => send(new("shutdown"), ct)));
-        var run = new Command("run");
+        root.Subcommands.Add(Action("install", (_, ct) => localActions.Install(ct), "Register the per-user service for automatic startup."));
+        root.Subcommands.Add(Action("start", (_, ct) => localActions.Start(ct), "Start the per-user service in the background."));
+        root.Subcommands.Add(Action("stop", (_, ct) => send(new("shutdown"), ct), "Stop the service without forgetting its mappings or sign-in."));
+        var run = new Command("run", "Run the service in the foreground.");
         run.SetAction((_, ct) => localActions.Run(error, ct));
-        service.Subcommands.Add(run);
-        return service;
+        root.Subcommands.Add(run);
     }
 
-    private Command Action(string name, Func<ParseResult, CancellationToken, Task<string>> handler)
+    private Command Action(string name, Func<ParseResult, CancellationToken, Task<string>> handler, string? description = null)
     {
-        var command = new Command(name);
+        var command = new Command(name, description);
         command.SetAction(async (r, ct) => output.WriteLine(await handler(r, ct)));
         return command;
     }

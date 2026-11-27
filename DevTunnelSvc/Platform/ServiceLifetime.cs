@@ -64,7 +64,7 @@ internal static class ServiceLifetime
             return systemctl(["start", Unit], ct);
         // Give the service a separate hidden console. Inheriting the starter's redirected handles
         // keeps the update worker's output pipes open even after the starter has exited.
-        start(new ProcessStartInfo(windowsExe, ["service", "run"]) { UseShellExecute = true, WindowStyle = ProcessWindowStyle.Hidden });
+        start(new ProcessStartInfo(windowsExe, ["run"]) { UseShellExecute = true, WindowStyle = ProcessWindowStyle.Hidden });
         return Task.CompletedTask;
     }
 
@@ -76,10 +76,10 @@ internal static class ServiceLifetime
         Func<string[], CancellationToken, Task> systemctl, CancellationToken ct)
     {
         if (registerStartup is not null)
-            registerStartup("DevTunnelSvc", $"\"{executable}\" service start");
+            registerStartup("DevTunnelSvc", $"\"{executable}\" start");
         else
             await InstallLinuxAsync(executable, configDirectory, systemctl, ct);
-        return "Installed for the current user. Run 'service start'.";
+        return "Installed for the current user. Run 'devtunnelsvc start'.";
     }
 
     internal static async Task InstallLinuxAsync(string executable, string configDirectory, Func<string[], CancellationToken, Task> systemctl, CancellationToken ct)
@@ -96,7 +96,7 @@ internal static class ServiceLifetime
             throw new ArgumentException("Control characters are not supported in the executable path.");
         var escaped = path.Replace("\\", "\\\\", StringComparison.Ordinal).Replace("\"", "\\\"", StringComparison.Ordinal)
             .Replace("%", "%%", StringComparison.Ordinal).Replace("$", "$$", StringComparison.Ordinal);
-        return $"[Unit]\nDescription=DevTunnelSvc\n\n[Service]\nExecStart=\"{escaped}\" service run\nRestart=on-failure\n\n[Install]\nWantedBy=default.target\n";
+        return $"[Unit]\nDescription=DevTunnelSvc\n\n[Service]\nExecStart=\"{escaped}\" run\nRestart=on-failure\n\n[Install]\nWantedBy=default.target\n";
     }
 
     internal static string ApplicationExecutable() => RequireExecutable(Environment.ProcessPath);
