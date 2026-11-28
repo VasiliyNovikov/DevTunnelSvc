@@ -136,12 +136,14 @@ public sealed class HttpTests
     }
 
     [TestMethod]
-    [DataRow(null, "use2", "/clusters/recommendations")]
-    [DataRow("EUW", "euw", "/clusters")]
-    public async Task ManagementSdkCreatesAnOwnerOnlyTunnelAndReturnsItsCluster(string? region, string cluster, string lookup)
+    [DataRow(null, null, "use2", "/clusters/recommendations")]
+    [DataRow(null, "EUW", "euw", "/clusters")]
+    [DataRow("build-vm", null, "use2", "/clusters/recommendations")]
+    [DataRow("lab-host", "EUW", "euw", "/clusters")]
+    public async Task ManagementSdkCreatesAnOwnerOnlyTunnelAndReturnsItsCluster(string? tunnelId, string? region, string cluster, string lookup)
     {
         List<string> lookups = [];
-        string? createdOn = null;
+        string? createdOn = null, createdId = null;
         using var handler = new HttpStub(async (request, ct) =>
         {
             if (request.Method == HttpMethod.Get)
@@ -162,15 +164,40 @@ public sealed class HttpTests
             using var body = JsonDocument.Parse(await request.Content!.ReadAsStringAsync(ct));
             Assert.IsFalse(body.RootElement.TryGetProperty("accessControl", out var acl) && acl.ValueKind != JsonValueKind.Null);
             Assert.Contains("*", request.Headers.GetValues("If-None-Match"));
+            createdId = body.RootElement.GetProperty("tunnelId").GetString();
+            Assert.IsFalse(string.IsNullOrEmpty(createdId));
+            if (tunnelId is not null) Assert.AreEqual(tunnelId, createdId);
+            Assert.AreEqual($"/tunnels/{createdId}", request.RequestUri!.AbsolutePath);
             createdOn = request.RequestUri!.Host;
-            return HttpStub.Json($$"""{"tunnelId":"blue-tunnel","clusterId":"{{cluster}}"}""");
+            return HttpStub.Json($$"""{"tunnelId":"{{createdId}}","clusterId":"{{cluster}}"}""");
         })
         { AllowAutoRedirect = false };
         await using var sdk = Management(handler);
-        Assert.AreEqual($"blue-tunnel.{cluster}", await sdk.CreateAsync(region, CancellationToken.None));
+        var key = await sdk.CreateAsync(tunnelId, region, CancellationToken.None);
+        Assert.AreEqual($"{createdId}.{cluster}", key);
         Assert.AreEqual($"{cluster}.rel.tunnels.api.visualstudio.com", createdOn);
         CollectionAssert.AreEqual(new[] { lookup }, lookups);
-        Assert.IsTrue(await sdk.DeleteAsync(TunnelKey.Parse($"blue-tunnel.{cluster}"), CancellationToken.None));
+        Assert.IsTrue(await sdk.DeleteAsync(TunnelKey.Parse(key), CancellationToken.None));
+    }
+
+    [TestMethod]
+    public async Task TakenCustomIdFailsWithoutUpdatingOrTryingAnotherId()
+    {
+        var attempts = 0;
+        using var handler = new HttpStub((r, _) =>
+        {
+            if (r.Method == HttpMethod.Get) return Task.FromResult(HttpStub.Json("""{"recommendedClusterId":"use2"}"""));
+            attempts++;
+            Assert.AreEqual(HttpMethod.Put, r.Method);
+            Assert.AreEqual("/tunnels/build-vm", r.RequestUri!.AbsolutePath);
+            Assert.Contains("*", r.Headers.GetValues("If-None-Match"));
+            return Task.FromResult(HttpStub.Json("""{"title":"Conflict","detail":"ID is already taken."}""", HttpStatusCode.Conflict));
+        })
+        { AllowAutoRedirect = false };
+        await using var sdk = Management(handler);
+        var error = await Assert.ThrowsExactlyAsync<InvalidOperationException>(() => sdk.CreateAsync("build-vm", null, CancellationToken.None));
+        Assert.IsInstanceOfType<HttpRequestException>(error.InnerException);
+        Assert.AreEqual(1, attempts);
     }
 
     [TestMethod]
@@ -183,7 +210,7 @@ public sealed class HttpTests
         })
         { AllowAutoRedirect = false };
         await using var sdk = new TunnelBackend(() => throw new AssertFailedException("Rejecting a region needs no token."), handler);
-        var error = await Assert.ThrowsExactlyAsync<ArgumentException>(() => sdk.CreateAsync("westeurope", CancellationToken.None));
+        var error = await Assert.ThrowsExactlyAsync<ArgumentException>(() => sdk.CreateAsync(null, "westeurope", CancellationToken.None));
         Assert.AreEqual("Unknown region 'westeurope'. Run 'regions' to see the available regions.", error.Message);
     }
 

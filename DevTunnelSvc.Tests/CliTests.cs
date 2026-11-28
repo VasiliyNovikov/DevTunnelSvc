@@ -195,18 +195,36 @@ public sealed class CliTests
     }
 
     [TestMethod]
-    public async Task CreateKeepsTheOriginalCommandUnlessARegionIsRequested()
+    public async Task CreateOnlyUsesTheNewWireCommandWhenAnIdIsRequested()
     {
         List<Request> requests = [];
         Task<string> Record(Request request, CancellationToken _) { requests.Add(request); return Task.FromResult("created"); }
-        Assert.AreEqual(0, await Cli.RunAsync(["create"], TextWriter.Null, TextWriter.Null, Record));
-        Assert.AreEqual(0, await Cli.RunAsync(["create", "--region", "euw"], TextWriter.Null, TextWriter.Null, Record));
-        // An older service rejects the region-aware command instead of creating the tunnel in its default region.
-        CollectionAssert.AreEqual(new Request[] { new("create"), new("create-in-region", Region: "euw") }, requests);
+        string[][] commands = [["create"], ["create", "--region", "euw"], ["create", "build-vm"], ["create", "--region", "euw", "lab-host"]];
+        foreach (var command in commands)
+        {
+            var result = await Cli.CaptureAsync(command, Record);
+            Assert.AreEqual(0, result.Code, result.Error);
+            Assert.AreEqual("created" + Environment.NewLine, result.Output);
+        }
+        CollectionAssert.AreEqual(new Request[] { new("create"), new("create-in-region", Region: "euw"),
+            new("create-with-id", "build-vm"), new("create-with-id", "lab-host", Region: "euw") }, requests);
         using var help = new StringWriter();
         Assert.AreEqual(0, await Cli.RunAsync(["create", "--help"], help, TextWriter.Null, Record));
         Assert.Contains("instead of the recommended one", help.ToString());
-        Assert.HasCount(2, requests);
+        Assert.Contains("tunnel-id", help.ToString());
+        Assert.HasCount(commands.Length, requests);
+    }
+
+    [TestMethod]
+    [DataRow("")]
+    [DataRow("build-vm.euw")]
+    [DataRow("Bad/Id")]
+    public async Task InvalidCustomIdFailsBeforeContactingTheService(string id)
+    {
+        var result = await Cli.CaptureAsync(["create", id]);
+        Assert.AreNotEqual(0, result.Code);
+        Assert.Contains("tunnel ID", result.Error);
+        Assert.IsEmpty(result.Output);
     }
 }
 

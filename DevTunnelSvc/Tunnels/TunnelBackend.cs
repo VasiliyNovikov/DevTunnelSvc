@@ -13,7 +13,7 @@ internal interface ILiveTunnel : IAsyncDisposable
 
 internal interface ITunnelBackend
 {
-    Task<string> CreateAsync(string? region, CancellationToken cancellation);
+    Task<string> CreateAsync(string? tunnelId, string? region, CancellationToken cancellation);
     Task<IReadOnlyList<TunnelSummary>> ListAsync(CancellationToken cancellation);
     Task<IReadOnlyList<TunnelRegion>> ListRegionsAsync(CancellationToken cancellation);
     Task<bool> DeleteAsync(TunnelKey key, CancellationToken cancellation);
@@ -39,10 +39,10 @@ internal sealed class TunnelBackend : ITunnelBackend, IAsyncDisposable
         regions = new(management, measureLatency);
     }
 
-    public async Task<string> CreateAsync(string? region, CancellationToken cancellation)
+    public async Task<string> CreateAsync(string? tunnelId, string? region, CancellationToken cancellation)
     {
         // Without a cluster, the SDK asks the service to recommend one.
-        var tunnel = new Tunnel { ClusterId = region is null ? null : await regions.FindAsync(region, cancellation) };
+        var tunnel = new Tunnel { TunnelId = tunnelId, ClusterId = region is null ? null : await regions.FindAsync(region, cancellation) };
         var created = await management.CreateTunnelAsync(tunnel, options: null, cancellation);
         return TunnelKey.Parse($"{created.TunnelId}.{created.ClusterId}").ToString();
     }

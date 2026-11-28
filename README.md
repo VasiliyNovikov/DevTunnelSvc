@@ -68,6 +68,8 @@ devtunnelsvc create
 devtunnelsvc host TUNNEL --tunnel-port 8080 --target-port 3000
 ```
 
+To choose the ID instead of generating one, use `devtunnelsvc create build-vm`. You can combine it with a region: `devtunnelsvc create build-vm --region euw` prints `build-vm.euw` on success. Pass only the ID (without `.euw`) to `create`, then use the full `id.cluster` with `host`, `connect`, and `delete`. If the ID is already taken in that region, creation fails rather than overwriting the existing tunnel.
+
 The `cluster` part of the ID is the tunnel's region. `create` uses the region Dev Tunnels recommends for your network, which isn't always the nearest one. `devtunnelsvc regions` compares every region, fastest first. `LATENCY` is one HTTPS round trip from this machine over an already open connection, and `-` means the region couldn't be reached. `AVAILABILITY`, `LOAD`, and `REASON` come from the service and only cover the regions it considered for your account. To choose a region, pass its `REGION` value, for example `devtunnelsvc create --region euw`. A tunnel can't change regions, so pick one close to both machines.
 
 On the **client**, use the same tunnel ID. Because both machines use the same account, `devtunnelsvc list` shows it as well, along with each tunnel's current host and client connection counts, expiration time (UTC), and registered tunnel ports. A `-` marks a value the Dev Tunnels service didn't report.

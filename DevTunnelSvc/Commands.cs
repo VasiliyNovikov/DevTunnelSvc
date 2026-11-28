@@ -109,8 +109,16 @@ internal sealed class Commands(TextReader input, TextWriter output, TextWriter e
 
     private Command Create()
     {
+        var id = new Argument<string?>("tunnel-id") { Arity = ArgumentArity.ZeroOrOne, Description = "Choose the tunnel ID without its cluster suffix. Omit it to generate an ID." };
         var region = new Option<string>("--region") { Description = "Create the tunnel in this region instead of the recommended one. Run 'regions' to compare them." };
-        var command = Action("create", (r, ct) => send(r.GetValue(region) is { } id ? new("create-in-region", Region: id) : new("create"), ct));
+        var command = Action("create", (r, ct) =>
+        {
+            var selectedRegion = r.GetValue(region);
+            if (r.GetValue(id) is { } tunnelId)
+                return send(new("create-with-id", TunnelKey.RequireId(tunnelId), Region: selectedRegion), ct);
+            return send(selectedRegion is null ? new("create") : new("create-in-region", Region: selectedRegion), ct);
+        });
+        command.Arguments.Add(id);
         command.Options.Add(region);
         return command;
     }

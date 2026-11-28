@@ -347,7 +347,7 @@ public sealed class ServiceTests : IDisposable
         await using var service = CreateService(backend);
         using var output = new StringWriter();
         using var error = new StringWriter();
-        string[][] remoteCommands = [["regions"], ["create", "--region", "euw"]];
+        string[][] remoteCommands = [["regions"], ["create", "--region", "euw"], ["create", "build-vm", "--region", "usw2"]];
         foreach (var command in remoteCommands)
         {
             error.GetStringBuilder().Clear();
@@ -364,10 +364,12 @@ public sealed class ServiceTests : IDisposable
             "euw     WestEurope   39 ms    -             -     -",
             "usw2    WestUs2      203 ms   -             -     -",
             "brs     BrazilSouth  -        -             -     -",
-            "blue-tunnel.euw", "blue-tunnel.use2", ""), output.ToString());
-        CollectionAssert.AreEqual(new string?[] { "euw", null }, backend.CreatedRegions);
+            "blue-tunnel.euw", "build-vm.usw2", "blue-tunnel.use2", ""), output.ToString());
         Assert.Contains("region", (await Assert.ThrowsExactlyAsync<ArgumentException>(
             () => service.ExecuteAsync(new("create-in-region"), CancellationToken.None))).Message);
+        foreach (var id in new string?[] { null, " " })
+            await Assert.ThrowsExactlyAsync<ArgumentException>(() => service.ExecuteAsync(new("create-with-id", id), CancellationToken.None));
+        CollectionAssert.AreEqual(new string?[] { "euw", "usw2", null }, backend.CreatedRegions);
     }
 
     [TestMethod]
@@ -542,10 +544,10 @@ public sealed class ServiceTests : IDisposable
         public List<string?> CreatedRegions { get; } = [];
         public bool Fail { get; init; }
         public Func<Mapping, CancellationToken, Task<ILiveTunnel>>? Open { get; init; }
-        public Task<string> CreateAsync(string? region, CancellationToken ct)
+        public Task<string> CreateAsync(string? tunnelId, string? region, CancellationToken ct)
         {
             CreatedRegions.Add(region);
-            return Task.FromResult($"blue-tunnel.{region ?? "use2"}");
+            return Task.FromResult($"{tunnelId ?? "blue-tunnel"}.{region ?? "use2"}");
         }
         public Task<IReadOnlyList<TunnelSummary>> ListAsync(CancellationToken ct) => Task.FromResult<IReadOnlyList<TunnelSummary>>(Tunnels);
         public Task<IReadOnlyList<TunnelRegion>> ListRegionsAsync(CancellationToken ct) => Task.FromResult<IReadOnlyList<TunnelRegion>>(Regions);

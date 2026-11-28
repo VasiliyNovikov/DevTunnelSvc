@@ -16,7 +16,7 @@ internal static class Program
           stop                            Stop the service and keep saved mappings and sign-in
           login [--no-browser] [--no-clipboard]  Sign in with GitHub
           logout                          Forget all mappings and remove the saved GitHub sign-in
-          create [--region <region>]      Create a private tunnel in the recommended or chosen region
+          create [<tunnel-id>] [--region <region>]  Create a private tunnel with a chosen or generated ID
           delete <tunnel>                 Delete an owned tunnel
           list                            Show your tunnels' host and client counts, expiration, and ports
           regions                         Compare regions by latency from this machine and recommendation

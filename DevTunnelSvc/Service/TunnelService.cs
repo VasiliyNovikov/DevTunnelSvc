@@ -52,9 +52,10 @@ internal sealed class TunnelService : IAsyncDisposable
                 new LocalStatus(credential.IsSignedIn, [.. sessions.Values.Select(LocalMappingStatus.From)]), StatusJson.Default.LocalStatus)),
             "service-pid" => () => Task.FromResult(Environment.ProcessId.ToString(CultureInfo.InvariantCulture)),
             "logout" => () => EndSessionAsync(logout: true),
-            "create" => () => Authenticated().CreateAsync(region: null, ct),
-            // Older services reject this command instead of ignoring the region and creating the tunnel elsewhere.
-            "create-in-region" => () => Authenticated().CreateAsync(request.Region ?? throw new ArgumentException("Missing region."), ct),
+            "create" => () => Authenticated().CreateAsync(tunnelId: null, region: null, ct),
+            // Distinct commands keep older services from silently ignoring a requested ID or region.
+            "create-in-region" => () => Authenticated().CreateAsync(tunnelId: null, request.Region ?? throw new ArgumentException("Missing region."), ct),
+            "create-with-id" => () => Authenticated().CreateAsync(TunnelKey.RequireId(request.Tunnel), request.Region, ct),
             "list" => () => ListAsync(ct),
             "regions" => () => RegionsAsync(ct),
             "delete" => () => DeleteAsync(TunnelKey.Parse(request.Tunnel), ct),

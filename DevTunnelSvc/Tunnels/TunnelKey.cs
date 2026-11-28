@@ -13,6 +13,9 @@ internal sealed record TunnelKey(string Id, string Cluster)
     }
 
     public override string ToString() => $"{Id}.{Cluster}";
+
+    internal static string RequireId(string? id) => id is not null && TunnelConstraints.IsValidNewTunnelId(id) ? id :
+        throw new ArgumentException("Expected a valid tunnel ID without a cluster suffix, for example build-vm.");
 }
 
 internal sealed record Mapping(bool Host, TunnelKey Tunnel, int TunnelPort, int LocalPort)
